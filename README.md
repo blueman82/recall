@@ -1,6 +1,6 @@
 # Recall
 
-Long-term memory system for Claude Code with semantic search and relationship tracking.
+Long-term memory system for MCP-compatible AI assistants with semantic search and relationship tracking.
 
 ## Features
 
@@ -76,7 +76,7 @@ Add Recall to your meta-mcp `servers.json`:
 }
 ```
 
-Or for Claude Desktop `claude_desktop_config.json`:
+Or for Claude Desktop / other MCP clients (`claude_desktop_config.json`):
 
 ```json
 {

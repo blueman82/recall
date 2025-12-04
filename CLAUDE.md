@@ -1,8 +1,8 @@
-# Recall - Long-term Memory System for Claude Code
+# Recall - Long-term Memory System for MCP Clients
 
 ## Project Overview
 
-Recall is an MCP (Model Context Protocol) server that provides persistent memory storage and retrieval with semantic search capabilities. It enables Claude Code to remember user preferences, decisions, patterns, and session context across conversations.
+Recall is an MCP (Model Context Protocol) server that provides persistent memory storage and retrieval with semantic search capabilities. It enables MCP-compatible clients (Claude Code, Claude Desktop, Cursor, etc.) to remember user preferences, decisions, patterns, and session context across conversations.
 
 ## Quick Start
 

@@ -33,7 +33,7 @@
 
 | Hook | What It Does |
 |------|--------------|
-| **SessionStart** | Loads relevant memories as context when you start Claude Code |
+| **SessionStart** | Loads relevant memories as context when you start a session |
 | **SessionEnd** | Summarizes session, stores important decisions/preferences automatically |
 
 You don't invoke these - they run automatically.
