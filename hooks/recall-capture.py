@@ -136,6 +136,20 @@ JSON output:"""
             start = output.find("```") + 3
             end = output.find("```", start)
             output = output[start:end].strip()
+        else:
+            # Extract first complete JSON array from plain text response
+            start = output.find("[")
+            if start != -1:
+                # Find matching closing bracket by counting
+                depth = 0
+                for i, char in enumerate(output[start:], start):
+                    if char == "[":
+                        depth += 1
+                    elif char == "]":
+                        depth -= 1
+                        if depth == 0:
+                            output = output[start:i + 1].strip()
+                            break
 
         return output
 
