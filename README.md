@@ -21,8 +21,9 @@ cd recall
 # Install with uv
 uv sync
 
-# Ensure Ollama is running with the embedding model
-ollama pull mxbai-embed-large
+# Ensure Ollama is running with required models
+ollama pull mxbai-embed-large  # Required: embeddings for semantic search
+ollama pull llama3.2           # Optional: session summarization for auto-capture hook
 ollama serve
 ```
 
@@ -291,7 +292,9 @@ uv run pytest tests/integration/test_mcp_server.py -v
 ## Requirements
 
 - Python 3.13+
-- Ollama with `mxbai-embed-large` model
+- Ollama with:
+  - `mxbai-embed-large` model (required for semantic search)
+  - `llama3.2` model (optional, for session auto-capture hook)
 - ~500MB disk space for ChromaDB indices
 
 ## License
