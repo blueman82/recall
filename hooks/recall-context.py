@@ -143,6 +143,9 @@ def main():
             # Only output if there's actual content
             if context and context.strip() and context != "# Memory Context\n\n_No memories found._":
                 print(context)
+                print()  # blank line
+                print("---")
+                print("**Memory tip:** When you notice user preferences, technical decisions, or patterns worth remembering, use `memory_store_tool` to save them.")
 
     except Exception as e:
         # Silently fail - don't block Claude Code
