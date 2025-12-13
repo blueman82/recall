@@ -371,17 +371,13 @@ def main():
         with open(log_path, "a") as f:
             f.write(f"{datetime.now().isoformat()} | Stored {stored} memories from session {session_id}\n")
 
-        if stored > 0:
-            print(
-                f"<!-- recall-capture: stored {stored} memories from session {session_id} -->",
-                file=sys.stderr,
-            )
-
+    except BrokenPipeError:
+        # Claude Code closed connection before we finished - this is fine
+        pass
     except Exception as e:
         # Log error but don't block Claude Code
         with open(log_path, "a") as f:
             f.write(f"{datetime.now().isoformat()} | ERROR: {e}\n")
-        print(f"<!-- recall-capture hook error: {e} -->", file=sys.stderr)
 
 
 if __name__ == "__main__":
