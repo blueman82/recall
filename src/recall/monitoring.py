@@ -403,20 +403,31 @@ Respond ONLY with a JSON object:
                 logger.warning("Claude CLI returned empty output")
                 return None
 
-            # The JSON output format wraps the result
-            result = json.loads(output)
+            # The JSON output format wraps the result in metadata
+            # Example: {"type":"result","result":"```json\n{...}\n```",...}
+            wrapper = json.loads(output)
 
-            # Extract the actual content from the JSON output format
-            # Claude CLI with --output-format json returns structured data
-            if isinstance(result, dict):
-                # If it has a "result" key, extract it
-                if "result" in result:
-                    content = result["result"]
-                    if isinstance(content, str):
-                        return cast(dict[str, Any], json.loads(content))
+            # Extract the actual content from the wrapper
+            if isinstance(wrapper, dict) and "result" in wrapper:
+                content = wrapper["result"]
+
+                if isinstance(content, str):
+                    # Strip markdown code blocks if present
+                    # Claude often wraps JSON in ```json ... ```
+                    content = content.strip()
+                    if content.startswith("```"):
+                        # Remove opening ```json or ```
+                        lines = content.split("\n")
+                        if lines[0].startswith("```"):
+                            lines = lines[1:]
+                        # Remove closing ```
+                        if lines and lines[-1].strip() == "```":
+                            lines = lines[:-1]
+                        content = "\n".join(lines)
+
+                    return cast(dict[str, Any], json.loads(content))
+                elif isinstance(content, dict):
                     return cast(dict[str, Any], content)
-                # Otherwise, it might be the direct response
-                return cast(dict[str, Any], result)
 
             return None
 

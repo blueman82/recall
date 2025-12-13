@@ -877,6 +877,166 @@ async def memory_analyze_health(
 
 
 # =============================================================================
+# Memory Inspection Tools
+# =============================================================================
+
+
+@mcp.tool()
+async def memory_count_tool(
+    namespace: Optional[str] = None,
+    memory_type: Optional[str] = None,
+) -> dict[str, Any]:
+    """Count memories with optional filters.
+
+    Provides a quick count of memories in the system, optionally
+    filtered by namespace and/or memory type.
+
+    Args:
+        namespace: Filter by namespace (optional, e.g., 'global' or 'project:myapp')
+        memory_type: Filter by type (optional, e.g., 'preference', 'decision', 'golden_rule')
+
+    Returns:
+        Dictionary with count and applied filters
+    """
+    if hybrid_store is None:
+        return {"success": False, "error": "Server not initialized"}
+
+    try:
+        count = hybrid_store.count_memories(
+            namespace=namespace,
+            memory_type=memory_type,
+        )
+        return {
+            "success": True,
+            "count": count,
+            "filters": {
+                "namespace": namespace,
+                "memory_type": memory_type,
+            },
+        }
+    except Exception as e:
+        logger.error(f"memory_count_tool failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def memory_list_tool(
+    namespace: Optional[str] = None,
+    memory_type: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    order_by: str = "created_at",
+    descending: bool = True,
+) -> dict[str, Any]:
+    """List memories with filtering and pagination.
+
+    Browse memories in the system with optional filters and pagination.
+    Useful for auditing, exploring, or debugging memory contents.
+
+    Args:
+        namespace: Filter by namespace (optional)
+        memory_type: Filter by type (optional)
+        limit: Maximum number of results (default: 100, max: 1000)
+        offset: Number of results to skip for pagination (default: 0)
+        order_by: Field to sort by (default: 'created_at', options: 'created_at', 'accessed_at', 'importance', 'confidence')
+        descending: Sort in descending order (default: True)
+
+    Returns:
+        Dictionary with list of memories and pagination info
+    """
+    if hybrid_store is None:
+        return {"success": False, "error": "Server not initialized"}
+
+    # Clamp limit to prevent excessive results
+    limit = min(limit, 1000)
+
+    try:
+        memories = hybrid_store.list_memories(
+            namespace=namespace,
+            memory_type=memory_type,
+            limit=limit,
+            offset=offset,
+            order_by=order_by,
+            descending=descending,
+        )
+        return {
+            "success": True,
+            "memories": memories,
+            "count": len(memories),
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "has_more": len(memories) == limit,
+            },
+            "filters": {
+                "namespace": namespace,
+                "memory_type": memory_type,
+                "order_by": order_by,
+                "descending": descending,
+            },
+        }
+    except Exception as e:
+        logger.error(f"memory_list_tool failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def validation_history_tool(
+    memory_id: str,
+    event_type: Optional[str] = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Get validation event history for a memory.
+
+    Shows the history of validation events (applied, succeeded, failed)
+    for a specific memory. Useful for understanding why a memory has
+    its current confidence score.
+
+    Args:
+        memory_id: ID of the memory to get history for
+        event_type: Filter by event type (optional: 'applied', 'succeeded', 'failed')
+        limit: Maximum number of events to return (default: 50)
+
+    Returns:
+        Dictionary with validation events and summary statistics
+    """
+    if hybrid_store is None:
+        return {"success": False, "error": "Server not initialized"}
+
+    try:
+        events = hybrid_store.get_validation_events(
+            memory_id=memory_id,
+            event_type=event_type,
+            limit=limit,
+        )
+
+        # Calculate summary stats
+        success_count = sum(1 for e in events if e.get("event_type") == "succeeded")
+        failure_count = sum(1 for e in events if e.get("event_type") == "failed")
+        applied_count = sum(1 for e in events if e.get("event_type") == "applied")
+
+        return {
+            "success": True,
+            "memory_id": memory_id,
+            "events": events,
+            "summary": {
+                "total_events": len(events),
+                "applied": applied_count,
+                "succeeded": success_count,
+                "failed": failure_count,
+                "success_rate": (
+                    success_count / (success_count + failure_count)
+                    if (success_count + failure_count) > 0
+                    else None
+                ),
+            },
+        }
+    except Exception as e:
+        logger.error(f"validation_history_tool failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
 # Direct Tool Invocation (for hooks)
 # =============================================================================
 
@@ -919,6 +1079,9 @@ async def call_tool_directly(
         "memory_detect_contradictions": memory_detect_contradictions,
         "memory_check_supersedes": memory_check_supersedes,
         "memory_analyze_health": memory_analyze_health,
+        "memory_count": memory_count_tool,
+        "memory_list": memory_list_tool,
+        "validation_history": validation_history_tool,
         "file_activity_add": file_activity_add,
         "file_activity_recent": file_activity_recent,
     }
