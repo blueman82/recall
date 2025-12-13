@@ -149,6 +149,7 @@ class HybridStore:
         memory_type: str = "general",
         namespace: str = "default",
         importance: float = 0.5,
+        confidence: float = 0.3,
         metadata: Optional[dict[str, Any]] = None,
         memory_id: Optional[str] = None,
     ) -> str:
@@ -163,6 +164,7 @@ class HybridStore:
             memory_type: Type of memory (e.g., 'fact', 'decision', 'context')
             namespace: Namespace for organizing memories
             importance: Importance score from 0.0 to 1.0
+            confidence: Confidence score from 0.0 to 1.0 (default: 0.3)
             metadata: Optional additional metadata as dict
             memory_id: Optional custom ID (auto-generated if not provided)
 
@@ -171,7 +173,7 @@ class HybridStore:
 
         Raises:
             HybridStoreError: If SQLite write fails (ChromaDB failures are non-fatal)
-            ValueError: If content is empty or importance out of range
+            ValueError: If content is empty or scores out of range
         """
         try:
             # Step 1: Add to SQLite (source of truth)
@@ -181,6 +183,7 @@ class HybridStore:
                 memory_type=memory_type,
                 namespace=namespace,
                 importance=importance,
+                confidence=confidence,
                 metadata=metadata,
                 memory_id=memory_id,
             )
@@ -295,6 +298,7 @@ class HybridStore:
         memory_type: Optional[str] = None,
         namespace: Optional[str] = None,
         importance: Optional[float] = None,
+        confidence: Optional[float] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> bool:
         """Update an existing memory in both stores.
@@ -308,6 +312,7 @@ class HybridStore:
             memory_type: New type (optional)
             namespace: New namespace (optional)
             importance: New importance score (optional)
+            confidence: New confidence score (optional)
             metadata: New metadata dict (optional)
 
         Returns:
@@ -324,6 +329,7 @@ class HybridStore:
                 memory_type=memory_type,
                 namespace=namespace,
                 importance=importance,
+                confidence=confidence,
                 metadata=metadata,
             )
 
@@ -715,6 +721,172 @@ class HybridStore:
             return count
         except SQLiteStoreError as e:
             raise HybridStoreError(f"Failed to clear stores: {e}") from e
+
+    # =========================================================================
+    # Validation Events Operations
+    # =========================================================================
+
+    def add_validation_event(
+        self,
+        memory_id: str,
+        event_type: str,
+        context: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        """Add a validation event for a memory.
+
+        Args:
+            memory_id: ID of the memory being validated
+            event_type: Type of event ('applied', 'succeeded', 'failed')
+            context: Optional context string (JSON)
+            session_id: Optional session ID
+
+        Returns:
+            The ID of the created validation event
+
+        Raises:
+            HybridStoreError: If add operation fails
+        """
+        try:
+            return self._sqlite.add_validation_event(
+                memory_id=memory_id,
+                event_type=event_type,
+                context=context,
+                session_id=session_id,
+            )
+        except SQLiteStoreError as e:
+            raise HybridStoreError(f"Failed to add validation event: {e}") from e
+
+    def get_validation_events(
+        self,
+        memory_id: str,
+        event_type: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Get validation events for a memory.
+
+        Args:
+            memory_id: ID of the memory
+            event_type: Filter by event type (optional)
+            limit: Maximum number of results (default: 100)
+
+        Returns:
+            List of validation event dicts
+
+        Raises:
+            HybridStoreError: If get operation fails
+        """
+        try:
+            return self._sqlite.get_validation_events(
+                memory_id=memory_id,
+                event_type=event_type,
+                limit=limit,
+            )
+        except SQLiteStoreError as e:
+            raise HybridStoreError(f"Failed to get validation events: {e}") from e
+
+    # =========================================================================
+    # File Activity Operations
+    # =========================================================================
+
+    def add_file_activity(
+        self,
+        file_path: str,
+        action: str,
+        session_id: Optional[str] = None,
+        project_root: Optional[str] = None,
+        file_type: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> int:
+        """Add a file activity record.
+
+        Args:
+            file_path: Path to the file
+            action: Action performed ('read', 'write', 'edit', 'multiedit')
+            session_id: Optional session ID
+            project_root: Optional project root directory
+            file_type: Optional file type (e.g., 'python', 'typescript')
+            metadata: Optional additional metadata
+
+        Returns:
+            The ID of the created file activity record
+
+        Raises:
+            HybridStoreError: If add operation fails
+        """
+        try:
+            return self._sqlite.add_file_activity(
+                file_path=file_path,
+                action=action,
+                session_id=session_id,
+                project_root=project_root,
+                file_type=file_type,
+                metadata=metadata,
+            )
+        except SQLiteStoreError as e:
+            raise HybridStoreError(f"Failed to add file activity: {e}") from e
+
+    def get_file_activity(
+        self,
+        file_path: Optional[str] = None,
+        action: Optional[str] = None,
+        project_root: Optional[str] = None,
+        limit: int = 100,
+        since: Optional[float] = None,
+    ) -> list[dict[str, Any]]:
+        """Get file activity records.
+
+        Args:
+            file_path: Filter by file path (optional)
+            action: Filter by action (optional)
+            project_root: Filter by project root (optional)
+            limit: Maximum number of results (default: 100)
+            since: Filter to activities after this timestamp (optional)
+
+        Returns:
+            List of file activity dicts
+
+        Raises:
+            HybridStoreError: If get operation fails
+        """
+        try:
+            return self._sqlite.get_file_activity(
+                file_path=file_path,
+                action=action,
+                project_root=project_root,
+                limit=limit,
+                since=since,
+            )
+        except SQLiteStoreError as e:
+            raise HybridStoreError(f"Failed to get file activity: {e}") from e
+
+    def get_recent_files(
+        self,
+        project_root: Optional[str] = None,
+        limit: int = 20,
+        days: int = 14,
+    ) -> list[dict[str, Any]]:
+        """Get recently accessed files with aggregated activity.
+
+        Args:
+            project_root: Filter by project root (optional)
+            limit: Maximum number of files to return (default: 20)
+            days: Look back this many days (default: 14)
+
+        Returns:
+            List of dicts with file_path, last_action, last_accessed, access_count
+
+        Raises:
+            HybridStoreError: If get operation fails
+        """
+        try:
+            return self._sqlite.get_recent_files(
+                project_root=project_root,
+                limit=limit,
+                days=days,
+            )
+        except SQLiteStoreError as e:
+            raise HybridStoreError(f"Failed to get recent files: {e}") from e
 
     @property
     def chroma_available(self) -> bool:

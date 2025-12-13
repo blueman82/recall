@@ -1425,6 +1425,20 @@ def test_memory_relate():
 # ============================================================================
 
 
+def _create_list_memories_mock(test_data):
+    """Create a mock for list_memories that handles golden_rule filtering.
+
+    Returns empty list when memory_type="golden_rule" (no golden rules in test data)
+    and returns test_data otherwise.
+    """
+    def list_memories_side_effect(**kwargs):
+        memory_type = kwargs.get("memory_type")
+        if memory_type == "golden_rule":
+            return []  # No golden rules in test data
+        return test_data
+    return list_memories_side_effect
+
+
 @pytest.mark.asyncio
 async def test_memory_context():
     """Top-level test for memory_context function with composite scoring and token budget.
@@ -1442,13 +1456,14 @@ async def test_memory_context():
 
     # Mock list_memories to return test data
     now = time.time()
-    mock_store.list_memories = MagicMock(return_value=[
+    test_data = [
         {
             "id": "mem_pref_1",
             "content": "User prefers dark mode",
             "type": "preference",
             "namespace": "global",
             "importance": 0.9,
+            "confidence": 0.3,  # Below golden rule threshold
             "accessed_at": now,  # Recent access
             "access_count": 10,
         },
@@ -1458,6 +1473,7 @@ async def test_memory_context():
             "type": "decision",
             "namespace": "global",
             "importance": 0.8,
+            "confidence": 0.3,  # Below golden rule threshold
             "accessed_at": now - 86400,  # 1 day ago
             "access_count": 5,
         },
@@ -1467,6 +1483,7 @@ async def test_memory_context():
             "type": "pattern",
             "namespace": "global",
             "importance": 0.7,
+            "confidence": 0.3,  # Below golden rule threshold
             "accessed_at": now - 172800,  # 2 days ago
             "access_count": 3,
         },
@@ -1476,10 +1493,12 @@ async def test_memory_context():
             "type": "session",
             "namespace": "global",
             "importance": 0.5,
+            "confidence": 0.3,  # Below golden rule threshold
             "accessed_at": now,
             "access_count": 1,
         },
-    ])
+    ]
+    mock_store.list_memories = MagicMock(side_effect=_create_list_memories_mock(test_data))
 
     # Test basic context generation
     context = await memory_context(
@@ -1522,12 +1541,13 @@ async def test_memory_context_token_budget():
             "type": "preference",
             "namespace": "global",
             "importance": 0.9,
+            "confidence": 0.3,  # Below golden rule threshold
             "accessed_at": now,
             "access_count": i,
         }
         for i in range(20)
     ]
-    mock_store.list_memories = MagicMock(return_value=memories)
+    mock_store.list_memories = MagicMock(side_effect=_create_list_memories_mock(memories))
 
     # Very small token budget
     context = await memory_context(
@@ -1555,6 +1575,7 @@ async def test_memory_context_composite_scoring():
         "type": "preference",
         "namespace": "global",
         "importance": 1.0,
+        "confidence": 0.3,  # Below golden rule threshold
         "accessed_at": now - (14 * 86400),  # 14 days ago
         "access_count": 1,
     }
@@ -1566,11 +1587,13 @@ async def test_memory_context_composite_scoring():
         "type": "preference",
         "namespace": "global",
         "importance": 0.5,
+        "confidence": 0.3,  # Below golden rule threshold
         "accessed_at": now,  # Just now
         "access_count": 10,  # Many accesses
     }
 
-    mock_store.list_memories = MagicMock(return_value=[old_high_importance, recent_low_importance])
+    test_data = [old_high_importance, recent_low_importance]
+    mock_store.list_memories = MagicMock(side_effect=_create_list_memories_mock(test_data))
 
     context = await memory_context(
         store=mock_store,
@@ -1713,8 +1736,13 @@ class TestMemoryContextIntegration:
 
     @pytest.mark.asyncio
     async def test_memory_context_integration(self, integration_store):
-        """Test full memory_context operation with real stores."""
-        # Store some memories
+        """Test full memory_context operation with real stores.
+
+        Note: Global memories are filtered to only include PREFERENCES with
+        importance >= 0.6. Decisions and patterns in global namespace are
+        excluded to prioritize project-specific context.
+        """
+        # Store global preference (will be included - preference with high importance)
         await memory_store(
             store=integration_store,
             content="User prefers vim keybindings",
@@ -1722,18 +1750,19 @@ class TestMemoryContextIntegration:
             namespace="global",
             importance=0.9,
         )
+        # Store project-specific memories (always included)
         await memory_store(
             store=integration_store,
             content="Decided to use FastAPI",
             memory_type=MemoryType.DECISION,
-            namespace="global",
+            namespace="project:testproj",  # Project namespace for inclusion
             importance=0.8,
         )
         await memory_store(
             store=integration_store,
             content="Pattern: Commits before lunch",
             memory_type=MemoryType.PATTERN,
-            namespace="global",
+            namespace="project:testproj",  # Project namespace for inclusion
             importance=0.7,
         )
 
@@ -1752,13 +1781,17 @@ class TestMemoryContextIntegration:
 
     @pytest.mark.asyncio
     async def test_memory_context_project_namespace_integration(self, integration_store):
-        """Test context includes both global and project namespace memories."""
-        # Store global memory
+        """Test context includes both global and project namespace memories.
+
+        Note: Global preferences must have importance >= 0.6 to be included.
+        """
+        # Store global memory with sufficient importance
         await memory_store(
             store=integration_store,
             content="Global preference setting",
             memory_type=MemoryType.PREFERENCE,
             namespace="global",
+            importance=0.7,  # Must be >= 0.6 for global preferences
         )
         # Store project-specific memory
         await memory_store(

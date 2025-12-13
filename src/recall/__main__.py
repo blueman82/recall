@@ -35,11 +35,14 @@ from mcp.server.fastmcp import FastMCP
 from recall.config import RecallSettings
 from recall.memory.operations import (
     ForgetResult,
+    memory_apply,
     memory_context,
     memory_forget,
+    memory_outcome,
     memory_recall,
     memory_relate,
     memory_store,
+    memory_validate,
 )
 from recall.memory.types import MemoryType, RelationType
 from recall.storage.hybrid import HybridStore
@@ -459,8 +462,12 @@ async def memory_forget_tool(
     namespace: Optional[str] = None,
     n_results: int = 5,
     confirm: bool = True,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Delete memories by ID or semantic search.
+
+    Golden rules (type=golden_rule or confidence >= 0.9) are protected from
+    deletion unless force=True is specified.
 
     Args:
         memory_id: Specific memory ID to delete (direct deletion mode)
@@ -468,6 +475,7 @@ async def memory_forget_tool(
         namespace: Filter deletion to specific namespace (optional)
         n_results: Number of search results to delete in query mode (default: 5)
         confirm: If True, proceed with deletion (default: True)
+        force: If True, allow deletion of golden rules (default: False)
 
     Returns:
         Result dictionary with success status, deleted_ids, and deleted_count
@@ -483,6 +491,7 @@ async def memory_forget_tool(
             namespace=namespace,
             n_results=n_results,
             confirm=confirm,
+            force=force,
         )
 
         return {
@@ -494,6 +503,236 @@ async def memory_forget_tool(
 
     except Exception as e:
         logger.error(f"memory_forget_tool failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
+# MCP Tool Handlers - File Activity
+# =============================================================================
+
+
+@mcp.tool()
+async def file_activity_add(
+    file_path: str,
+    action: str,
+    session_id: Optional[str] = None,
+    project_root: Optional[str] = None,
+    file_type: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Record a file activity event.
+
+    Used by PostToolUse hooks to track what files have been accessed.
+
+    Args:
+        file_path: Path to the file that was accessed
+        action: Type of action (read, write, edit, multiedit)
+        session_id: Optional session ID for grouping activities
+        project_root: Optional project root directory
+        file_type: Optional file type (e.g., 'python', 'typescript')
+        metadata: Optional additional metadata
+
+    Returns:
+        Result dictionary with success status and activity_id
+    """
+    if hybrid_store is None:
+        return {"success": False, "error": "Server not initialized"}
+
+    try:
+        activity_id = hybrid_store.add_file_activity(
+            file_path=file_path,
+            action=action,
+            session_id=session_id,
+            project_root=project_root,
+            file_type=file_type,
+            metadata=metadata,
+        )
+
+        return {
+            "success": True,
+            "activity_id": activity_id,
+        }
+
+    except Exception as e:
+        logger.error(f"file_activity_add failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def file_activity_recent(
+    project_root: Optional[str] = None,
+    limit: int = 20,
+    days: int = 14,
+) -> dict[str, Any]:
+    """Get recently accessed files with aggregated activity.
+
+    Args:
+        project_root: Filter by project root (optional)
+        limit: Maximum number of files to return (default: 20)
+        days: Look back this many days (default: 14)
+
+    Returns:
+        Dictionary with success status and list of recent files
+    """
+    if hybrid_store is None:
+        return {"success": False, "error": "Server not initialized"}
+
+    try:
+        files = hybrid_store.get_recent_files(
+            project_root=project_root,
+            limit=limit,
+            days=days,
+        )
+
+        return {
+            "success": True,
+            "files": files,
+            "count": len(files),
+        }
+
+    except Exception as e:
+        logger.error(f"file_activity_recent failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
+# MCP Tool Handlers - Memory Validation
+# =============================================================================
+
+
+@mcp.tool()
+async def memory_validate_tool(
+    memory_id: str,
+    success: bool,
+    adjustment: float = 0.1,
+) -> dict[str, Any]:
+    """Validate a memory and adjust its confidence score.
+
+    Adjusts confidence based on whether the memory was useful:
+    - Success: confidence += adjustment (max 1.0)
+    - Failure: confidence -= adjustment * 1.5 (min 0.0)
+
+    Automatically promotes to GOLDEN_RULE when confidence reaches 0.9.
+
+    Args:
+        memory_id: ID of the memory to validate
+        success: Whether the memory application was successful
+        adjustment: Base confidence adjustment (default: 0.1)
+
+    Returns:
+        Result with old/new confidence, promotion status, or error
+    """
+    if hybrid_store is None:
+        return {"success": False, "error": "Server not initialized"}
+
+    try:
+        result = await memory_validate(
+            store=hybrid_store,
+            memory_id=memory_id,
+            success=success,
+            adjustment=adjustment,
+        )
+
+        return {
+            "success": result.success,
+            "memory_id": result.memory_id,
+            "old_confidence": result.old_confidence,
+            "new_confidence": result.new_confidence,
+            "promoted": result.promoted,
+            "error": result.error,
+        }
+
+    except Exception as e:
+        logger.error(f"memory_validate_tool failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def memory_apply_tool(
+    memory_id: str,
+    context: str,
+    session_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Record that a memory is being applied.
+
+    Creates a validation event to track when a memory is used in practice.
+    This starts the TRY phase of the validation loop.
+
+    Args:
+        memory_id: ID of the memory being applied
+        context: Description of how/where the memory is being applied
+        session_id: Optional session identifier
+
+    Returns:
+        Result with event ID or error
+    """
+    if hybrid_store is None:
+        return {"success": False, "error": "Server not initialized"}
+
+    try:
+        result = await memory_apply(
+            store=hybrid_store,
+            memory_id=memory_id,
+            context=context,
+            session_id=session_id,
+        )
+
+        return {
+            "success": result.success,
+            "memory_id": result.memory_id,
+            "event_id": result.event_id,
+            "error": result.error,
+        }
+
+    except Exception as e:
+        logger.error(f"memory_apply_tool failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def memory_outcome_tool(
+    memory_id: str,
+    success: bool,
+    error_msg: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Record the outcome of a memory application and adjust confidence.
+
+    Records whether applying a memory succeeded or failed, creating a
+    validation event and adjusting confidence accordingly.
+
+    Args:
+        memory_id: ID of the memory that was applied
+        success: Whether the application was successful
+        error_msg: Optional error message if failed
+        session_id: Optional session identifier
+
+    Returns:
+        Result with updated confidence and promotion status
+    """
+    if hybrid_store is None:
+        return {"success": False, "error": "Server not initialized"}
+
+    try:
+        result = await memory_outcome(
+            store=hybrid_store,
+            memory_id=memory_id,
+            success=success,
+            error_msg=error_msg,
+            session_id=session_id,
+        )
+
+        return {
+            "success": result.success,
+            "memory_id": result.memory_id,
+            "outcome_success": result.outcome_success,
+            "new_confidence": result.new_confidence,
+            "promoted": result.promoted,
+            "error": result.error,
+        }
+
+    except Exception as e:
+        logger.error(f"memory_outcome_tool failed: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
 
 
@@ -534,6 +773,11 @@ async def call_tool_directly(
         "memory_relate": memory_relate_tool,
         "memory_context": memory_context_tool,
         "memory_forget": memory_forget_tool,
+        "memory_validate": memory_validate_tool,
+        "memory_apply": memory_apply_tool,
+        "memory_outcome": memory_outcome_tool,
+        "file_activity_add": file_activity_add,
+        "file_activity_recent": file_activity_recent,
     }
 
     handler = tool_handlers.get(tool_name)

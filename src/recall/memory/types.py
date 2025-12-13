@@ -24,11 +24,15 @@ class MemoryType(Enum):
     - DECISION: Design or implementation decisions
     - PATTERN: Recognized patterns or recurring behaviors
     - SESSION: Session-related information or conversation context
+    - FILE_CONTEXT: File activity tracking (what files were touched)
+    - GOLDEN_RULE: High-confidence memories that are constitutional principles
     """
     PREFERENCE = "preference"
     DECISION = "decision"
     PATTERN = "pattern"
     SESSION = "session"
+    FILE_CONTEXT = "file_context"
+    GOLDEN_RULE = "golden_rule"
 
 
 class RelationType(Enum):
@@ -78,12 +82,14 @@ class Memory:
         type: Category of the memory (MemoryType enum)
         namespace: Scope of the memory ('global' or 'project:{name}')
         importance: Importance score from 0.0 to 1.0
+        confidence: Confidence score from 0.0 to 1.0 (validated through usage)
         created_at: When the memory was created
         accessed_at: When the memory was last accessed
         access_count: Number of times the memory has been accessed
+        metadata: Optional additional metadata
 
     Raises:
-        ValueError: If namespace format is invalid or importance is out of range
+        ValueError: If namespace format is invalid or scores are out of range
     """
     id: str
     content: str
@@ -91,9 +97,11 @@ class Memory:
     type: MemoryType
     namespace: str = "global"
     importance: float = 0.5
+    confidence: float = 0.3
     created_at: datetime = field(default_factory=datetime.now)
     accessed_at: datetime = field(default_factory=datetime.now)
     access_count: int = 0
+    metadata: Optional[dict] = None
 
     def __post_init__(self) -> None:
         """Validate memory fields after initialization."""
@@ -109,6 +117,31 @@ class Memory:
             raise ValueError(
                 f"Importance must be between 0.0 and 1.0, got {self.importance}"
             )
+
+        # Validate confidence range
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(
+                f"Confidence must be between 0.0 and 1.0, got {self.confidence}"
+            )
+
+    def is_golden_rule(self) -> bool:
+        """Check if this memory qualifies as a golden rule.
+
+        Returns:
+            True if confidence >= 0.9 or type is GOLDEN_RULE
+        """
+        return self.confidence >= 0.9 or self.type == MemoryType.GOLDEN_RULE
+
+    def can_be_promoted(self) -> bool:
+        """Check if this memory can be promoted to golden rule.
+
+        Only PREFERENCE, DECISION, and PATTERN types can be promoted.
+
+        Returns:
+            True if eligible for golden rule promotion
+        """
+        promotable_types = {MemoryType.PREFERENCE, MemoryType.DECISION, MemoryType.PATTERN}
+        return self.type in promotable_types and self.confidence >= 0.9
 
 
 @dataclass
@@ -167,3 +200,61 @@ class RecallResult:
     memories: list[Memory] = field(default_factory=list)
     total: int = 0
     score: Optional[float] = None
+
+
+@dataclass
+class ValidateResult:
+    """Result of a memory validation operation.
+
+    Records the outcome of validating (confirming or refuting) a memory.
+
+    Attributes:
+        success: Whether the validation was recorded
+        memory_id: ID of the validated memory
+        old_confidence: Confidence before validation
+        new_confidence: Confidence after validation
+        promoted: Whether memory was promoted to golden rule
+        error: Error message (if failed)
+    """
+    success: bool
+    memory_id: Optional[str] = None
+    old_confidence: Optional[float] = None
+    new_confidence: Optional[float] = None
+    promoted: bool = False
+    error: Optional[str] = None
+
+
+@dataclass
+class ApplyResult:
+    """Result of applying a memory (recording its use).
+
+    Attributes:
+        success: Whether the apply was recorded
+        memory_id: ID of the applied memory
+        event_id: ID of the validation event created
+        error: Error message (if failed)
+    """
+    success: bool
+    memory_id: Optional[str] = None
+    event_id: Optional[int] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class OutcomeResult:
+    """Result of recording an outcome for a memory application.
+
+    Attributes:
+        success: Whether the outcome was recorded
+        memory_id: ID of the memory
+        outcome_success: Whether the memory application succeeded
+        new_confidence: Updated confidence score
+        promoted: Whether memory was promoted to golden rule
+        error: Error message (if failed)
+    """
+    success: bool
+    memory_id: Optional[str] = None
+    outcome_success: Optional[bool] = None
+    new_confidence: Optional[float] = None
+    promoted: bool = False
+    error: Optional[str] = None

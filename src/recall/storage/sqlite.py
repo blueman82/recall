@@ -5,16 +5,68 @@ This module provides a SQLite-based storage layer for Recall with support for:
 - Graph edges (relationships between memories)
 - FTS5 full-text search index
 - Outbox table for ChromaDB sync
+- Schema versioning and migrations
 
 The SQLiteStore class manages all SQLite operations and uses content_hash
 for deduplication within namespaces.
 """
 
 import hashlib
+import logging
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+# Schema version migrations
+# Each migration has a description and up SQL (can be a list of statements)
+MIGRATIONS: dict[int, dict[str, Any]] = {
+    1: {
+        "description": "Add confidence column to memories",
+        "up": [
+            "ALTER TABLE memories ADD COLUMN confidence REAL NOT NULL DEFAULT 0.3",
+            "CREATE INDEX IF NOT EXISTS idx_memories_confidence ON memories(confidence)",
+        ],
+    },
+    2: {
+        "description": "Add validation_events table",
+        "up": [
+            """CREATE TABLE IF NOT EXISTS validation_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                memory_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                context TEXT,
+                created_at REAL NOT NULL,
+                session_id TEXT,
+                FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_validation_events_memory ON validation_events(memory_id)",
+            "CREATE INDEX IF NOT EXISTS idx_validation_events_type ON validation_events(event_type)",
+            "CREATE INDEX IF NOT EXISTS idx_validation_events_created ON validation_events(created_at)",
+        ],
+    },
+    3: {
+        "description": "Add file_activity table for PostToolUse tracking",
+        "up": [
+            """CREATE TABLE IF NOT EXISTS file_activity (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL,
+                action TEXT NOT NULL,
+                session_id TEXT,
+                project_root TEXT,
+                file_type TEXT,
+                created_at REAL NOT NULL,
+                metadata TEXT
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_file_activity_path ON file_activity(file_path)",
+            "CREATE INDEX IF NOT EXISTS idx_file_activity_action ON file_activity(action)",
+            "CREATE INDEX IF NOT EXISTS idx_file_activity_created ON file_activity(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_file_activity_project ON file_activity(project_root)",
+        ],
+    },
+}
 
 
 class SQLiteStoreError(Exception):
@@ -237,9 +289,90 @@ class SQLiteStore:
 
             self._conn.commit()
 
+            # Run migrations after base schema is ready
+            self._run_migrations()
+
         except sqlite3.Error as e:
             self._conn.rollback()
             raise SQLiteStoreError(f"Failed to initialize schema: {e}") from e
+
+    def _init_schema_version_table(self) -> None:
+        """Initialize the schema_version table for tracking migrations.
+
+        Creates the table if it doesn't exist and records version 0
+        as the baseline for fresh databases.
+        """
+        cursor = self._conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at REAL NOT NULL,
+                description TEXT
+            )
+        """)
+        self._conn.commit()
+
+    def _get_schema_version(self) -> int:
+        """Get the current schema version.
+
+        Returns:
+            Current schema version number (0 if no migrations applied)
+        """
+        self._init_schema_version_table()
+        cursor = self._conn.cursor()
+        cursor.execute("SELECT MAX(version) FROM schema_version")
+        result = cursor.fetchone()
+        return result[0] if result and result[0] is not None else 0
+
+    def _run_migrations(self) -> None:
+        """Run any pending schema migrations.
+
+        Applies migrations in order from current version to latest.
+        Each migration is applied in a transaction for safety.
+
+        Raises:
+            SQLiteStoreError: If a migration fails
+        """
+        current_version = self._get_schema_version()
+        max_version = max(MIGRATIONS.keys()) if MIGRATIONS else 0
+
+        if current_version >= max_version:
+            return  # Already up to date
+
+        logger.info(f"Running migrations from v{current_version} to v{max_version}")
+
+        for version in range(current_version + 1, max_version + 1):
+            if version not in MIGRATIONS:
+                continue
+
+            migration = MIGRATIONS[version]
+            description = migration.get("description", f"Migration {version}")
+            up_sql = migration.get("up", [])
+
+            # Normalize to list
+            if isinstance(up_sql, str):
+                up_sql = [up_sql]
+
+            try:
+                cursor = self._conn.cursor()
+
+                for sql in up_sql:
+                    cursor.execute(sql)
+
+                # Record migration
+                cursor.execute(
+                    "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)",
+                    (version, time.time(), description),
+                )
+
+                self._conn.commit()
+                logger.info(f"Applied migration v{version}: {description}")
+
+            except sqlite3.Error as e:
+                self._conn.rollback()
+                raise SQLiteStoreError(
+                    f"Migration v{version} failed ({description}): {e}"
+                ) from e
 
     @staticmethod
     def _compute_content_hash(content: str) -> str:
@@ -271,6 +404,7 @@ class SQLiteStore:
         memory_type: str = "general",
         namespace: str = "default",
         importance: float = 0.5,
+        confidence: float = 0.3,
         metadata: Optional[dict[str, Any]] = None,
         memory_id: Optional[str] = None,
     ) -> str:
@@ -281,6 +415,7 @@ class SQLiteStore:
             memory_type: Type of memory (e.g., 'fact', 'decision', 'context')
             namespace: Namespace for organizing memories
             importance: Importance score from 0.0 to 1.0
+            confidence: Confidence score from 0.0 to 1.0 (default: 0.3)
             metadata: Optional additional metadata as dict
             memory_id: Optional custom ID (auto-generated if not provided)
 
@@ -296,6 +431,9 @@ class SQLiteStore:
 
         if importance < 0.0 or importance > 1.0:
             raise ValueError("Importance must be between 0.0 and 1.0")
+
+        if confidence < 0.0 or confidence > 1.0:
+            raise ValueError("Confidence must be between 0.0 and 1.0")
 
         content_hash = self._compute_content_hash(content)
         now = time.time()
@@ -313,8 +451,8 @@ class SQLiteStore:
                 """
                 INSERT INTO memories (
                     id, content, content_hash, type, namespace,
-                    importance, created_at, accessed_at, access_count, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    importance, confidence, created_at, accessed_at, access_count, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                 """,
                 (
                     mem_id,
@@ -323,6 +461,7 @@ class SQLiteStore:
                     memory_type,
                     namespace,
                     importance,
+                    confidence,
                     now,
                     now,
                     metadata_json,
@@ -369,7 +508,7 @@ class SQLiteStore:
             cursor.execute(
                 """
                 SELECT id, content, content_hash, type, namespace,
-                       importance, created_at, accessed_at, access_count, metadata
+                       importance, confidence, created_at, accessed_at, access_count, metadata
                 FROM memories WHERE id = ?
                 """,
                 (memory_id,),
@@ -388,6 +527,7 @@ class SQLiteStore:
                 "type": row["type"],
                 "namespace": row["namespace"],
                 "importance": row["importance"],
+                "confidence": row["confidence"],
                 "created_at": row["created_at"],
                 "accessed_at": row["accessed_at"],
                 "access_count": row["access_count"],
@@ -404,6 +544,7 @@ class SQLiteStore:
         memory_type: Optional[str] = None,
         namespace: Optional[str] = None,
         importance: Optional[float] = None,
+        confidence: Optional[float] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> bool:
         """Update an existing memory.
@@ -414,6 +555,7 @@ class SQLiteStore:
             memory_type: New type (optional)
             namespace: New namespace (optional)
             importance: New importance score (optional)
+            confidence: New confidence score (optional)
             metadata: New metadata dict (optional)
 
         Returns:
@@ -425,6 +567,9 @@ class SQLiteStore:
         """
         if importance is not None and (importance < 0.0 or importance > 1.0):
             raise ValueError("Importance must be between 0.0 and 1.0")
+
+        if confidence is not None and (confidence < 0.0 or confidence > 1.0):
+            raise ValueError("Confidence must be between 0.0 and 1.0")
 
         try:
             cursor = self._conn.cursor()
@@ -450,6 +595,10 @@ class SQLiteStore:
             if importance is not None:
                 updates.append("importance = ?")
                 params.append(importance)
+
+            if confidence is not None:
+                updates.append("confidence = ?")
+                params.append(confidence)
 
             if metadata is not None:
                 import json
@@ -586,6 +735,7 @@ class SQLiteStore:
             "created_at",
             "accessed_at",
             "importance",
+            "confidence",
             "access_count",
         }
         if order_by not in allowed_order_fields:
@@ -597,7 +747,7 @@ class SQLiteStore:
             # Build query with optional filters
             query = """
                 SELECT id, content, content_hash, type, namespace,
-                       importance, created_at, accessed_at, access_count, metadata
+                       importance, confidence, created_at, accessed_at, access_count, metadata
                 FROM memories
             """
             conditions = []
@@ -632,6 +782,7 @@ class SQLiteStore:
                     "type": row["type"],
                     "namespace": row["namespace"],
                     "importance": row["importance"],
+                    "confidence": row["confidence"],
                     "created_at": row["created_at"],
                     "accessed_at": row["accessed_at"],
                     "access_count": row["access_count"],
@@ -670,7 +821,7 @@ class SQLiteStore:
             # Join FTS results with memories table for full data
             query_sql = """
                 SELECT m.id, m.content, m.content_hash, m.type, m.namespace,
-                       m.importance, m.created_at, m.accessed_at, m.access_count,
+                       m.importance, m.confidence, m.created_at, m.accessed_at, m.access_count,
                        m.metadata, bm25(memories_fts) as rank
                 FROM memories_fts fts
                 JOIN memories m ON fts.id = m.id
@@ -702,6 +853,7 @@ class SQLiteStore:
                     "type": row["type"],
                     "namespace": row["namespace"],
                     "importance": row["importance"],
+                    "confidence": row["confidence"],
                     "created_at": row["created_at"],
                     "accessed_at": row["accessed_at"],
                     "access_count": row["access_count"],
@@ -713,6 +865,287 @@ class SQLiteStore:
 
         except sqlite3.Error as e:
             raise SQLiteStoreError(f"Failed to search memories: {e}") from e
+
+    # =========================================================================
+    # Validation Events Operations
+    # =========================================================================
+
+    def add_validation_event(
+        self,
+        memory_id: str,
+        event_type: str,
+        context: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        """Add a validation event for a memory.
+
+        Args:
+            memory_id: ID of the memory being validated
+            event_type: Type of event ('applied', 'succeeded', 'failed')
+            context: Optional context string (JSON)
+            session_id: Optional session ID
+
+        Returns:
+            The ID of the created validation event
+
+        Raises:
+            SQLiteStoreError: If add operation fails
+        """
+        try:
+            cursor = self._conn.cursor()
+            now = time.time()
+
+            cursor.execute(
+                """
+                INSERT INTO validation_events (memory_id, event_type, context, created_at, session_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (memory_id, event_type, context, now, session_id),
+            )
+
+            event_id = cursor.lastrowid
+            self._conn.commit()
+            return event_id  # type: ignore[return-value]
+
+        except sqlite3.Error as e:
+            self._conn.rollback()
+            raise SQLiteStoreError(f"Failed to add validation event: {e}") from e
+
+    def get_validation_events(
+        self,
+        memory_id: str,
+        event_type: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Get validation events for a memory.
+
+        Args:
+            memory_id: ID of the memory
+            event_type: Filter by event type (optional)
+            limit: Maximum number of results (default: 100)
+
+        Returns:
+            List of validation event dicts
+
+        Raises:
+            SQLiteStoreError: If get operation fails
+        """
+        try:
+            cursor = self._conn.cursor()
+
+            query = """
+                SELECT id, memory_id, event_type, context, created_at, session_id
+                FROM validation_events
+                WHERE memory_id = ?
+            """
+            params: list[Any] = [memory_id]
+
+            if event_type is not None:
+                query += " AND event_type = ?"
+                params.append(event_type)
+
+            query += " ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+            import json
+
+            return [
+                {
+                    "id": row["id"],
+                    "memory_id": row["memory_id"],
+                    "event_type": row["event_type"],
+                    "context": json.loads(row["context"]) if row["context"] else None,
+                    "created_at": row["created_at"],
+                    "session_id": row["session_id"],
+                }
+                for row in rows
+            ]
+
+        except sqlite3.Error as e:
+            raise SQLiteStoreError(f"Failed to get validation events: {e}") from e
+
+    # =========================================================================
+    # File Activity Operations
+    # =========================================================================
+
+    def add_file_activity(
+        self,
+        file_path: str,
+        action: str,
+        session_id: Optional[str] = None,
+        project_root: Optional[str] = None,
+        file_type: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> int:
+        """Add a file activity record.
+
+        Args:
+            file_path: Path to the file
+            action: Action performed ('read', 'write', 'edit', 'multiedit')
+            session_id: Optional session ID
+            project_root: Optional project root directory
+            file_type: Optional file type (e.g., 'python', 'typescript')
+            metadata: Optional additional metadata
+
+        Returns:
+            The ID of the created file activity record
+
+        Raises:
+            SQLiteStoreError: If add operation fails
+        """
+        try:
+            cursor = self._conn.cursor()
+            now = time.time()
+
+            import json
+
+            metadata_json = json.dumps(metadata) if metadata else None
+
+            cursor.execute(
+                """
+                INSERT INTO file_activity (file_path, action, session_id, project_root, file_type, created_at, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (file_path, action, session_id, project_root, file_type, now, metadata_json),
+            )
+
+            activity_id = cursor.lastrowid
+            self._conn.commit()
+            return activity_id  # type: ignore[return-value]
+
+        except sqlite3.Error as e:
+            self._conn.rollback()
+            raise SQLiteStoreError(f"Failed to add file activity: {e}") from e
+
+    def get_file_activity(
+        self,
+        file_path: Optional[str] = None,
+        action: Optional[str] = None,
+        project_root: Optional[str] = None,
+        limit: int = 100,
+        since: Optional[float] = None,
+    ) -> list[dict[str, Any]]:
+        """Get file activity records.
+
+        Args:
+            file_path: Filter by file path (optional)
+            action: Filter by action (optional)
+            project_root: Filter by project root (optional)
+            limit: Maximum number of results (default: 100)
+            since: Filter to activities after this timestamp (optional)
+
+        Returns:
+            List of file activity dicts
+
+        Raises:
+            SQLiteStoreError: If get operation fails
+        """
+        try:
+            cursor = self._conn.cursor()
+
+            query = """
+                SELECT id, file_path, action, session_id, project_root, file_type, created_at, metadata
+                FROM file_activity
+                WHERE 1=1
+            """
+            params: list[Any] = []
+
+            if file_path is not None:
+                query += " AND file_path = ?"
+                params.append(file_path)
+
+            if action is not None:
+                query += " AND action = ?"
+                params.append(action)
+
+            if project_root is not None:
+                query += " AND project_root = ?"
+                params.append(project_root)
+
+            if since is not None:
+                query += " AND created_at > ?"
+                params.append(since)
+
+            query += " ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+            import json
+
+            return [
+                {
+                    "id": row["id"],
+                    "file_path": row["file_path"],
+                    "action": row["action"],
+                    "session_id": row["session_id"],
+                    "project_root": row["project_root"],
+                    "file_type": row["file_type"],
+                    "created_at": row["created_at"],
+                    "metadata": json.loads(row["metadata"]) if row["metadata"] else None,
+                }
+                for row in rows
+            ]
+
+        except sqlite3.Error as e:
+            raise SQLiteStoreError(f"Failed to get file activity: {e}") from e
+
+    def get_recent_files(
+        self,
+        project_root: Optional[str] = None,
+        limit: int = 20,
+        days: int = 14,
+    ) -> list[dict[str, Any]]:
+        """Get recently accessed files with aggregated activity.
+
+        Args:
+            project_root: Filter by project root (optional)
+            limit: Maximum number of files to return (default: 20)
+            days: Look back this many days (default: 14)
+
+        Returns:
+            List of dicts with file_path, last_action, last_accessed, access_count
+
+        Raises:
+            SQLiteStoreError: If get operation fails
+        """
+        try:
+            cursor = self._conn.cursor()
+            since = time.time() - (days * 86400)
+
+            query = """
+                SELECT file_path, action as last_action, MAX(created_at) as last_accessed, COUNT(*) as access_count
+                FROM file_activity
+                WHERE created_at > ?
+            """
+            params: list[Any] = [since]
+
+            if project_root is not None:
+                query += " AND project_root = ?"
+                params.append(project_root)
+
+            query += " GROUP BY file_path ORDER BY last_accessed DESC LIMIT ?"
+            params.append(limit)
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+            return [
+                {
+                    "file_path": row["file_path"],
+                    "last_action": row["last_action"],
+                    "last_accessed": row["last_accessed"],
+                    "access_count": row["access_count"],
+                }
+                for row in rows
+            ]
+
+        except sqlite3.Error as e:
+            raise SQLiteStoreError(f"Failed to get recent files: {e}") from e
 
     # =========================================================================
     # Edge (Graph) Operations

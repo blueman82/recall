@@ -10,7 +10,16 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
-from recall.memory.types import Memory, MemoryType, RecallResult, RelationType, StoreResult
+from recall.memory.types import (
+    ApplyResult,
+    Memory,
+    MemoryType,
+    OutcomeResult,
+    RecallResult,
+    RelationType,
+    StoreResult,
+    ValidateResult,
+)
 from recall.storage.hybrid import HybridStore
 from recall.storage.sqlite import SQLiteStore
 
@@ -401,9 +410,51 @@ async def memory_context(
         except Exception:
             pass  # Semantic search failed, continue with what we have
 
+    # 4. Get ALL golden rules (they always appear regardless of namespace)
+    # Golden rules are either type=golden_rule OR confidence >= 0.9
+    all_golden_rules: list[dict[str, Any]] = []
+
+    # Get project golden rules
+    project_golden = store.list_memories(
+        namespace=project_namespace,
+        memory_type="golden_rule",
+        limit=n_results,
+    )
+    all_golden_rules.extend(project_golden)
+
+    # Get global golden rules
+    global_golden = store.list_memories(
+        namespace="global",
+        memory_type="golden_rule",
+        limit=n_results,
+    )
+    all_golden_rules.extend(global_golden)
+
+    # Also find high-confidence memories that qualify as golden rules
+    high_confidence_project = [
+        mem for mem in store.list_memories(namespace=project_namespace, limit=100)
+        if mem.get("confidence", 0.3) >= 0.9 and mem.get("type") != "golden_rule"
+    ]
+    all_golden_rules.extend(high_confidence_project)
+
+    high_confidence_global = [
+        mem for mem in store.list_memories(namespace="global", limit=100)
+        if mem.get("confidence", 0.3) >= 0.9 and mem.get("type") != "golden_rule"
+    ]
+    all_golden_rules.extend(high_confidence_global)
+
     # Remove duplicates by ID
     seen_ids: set[str] = set()
     unique_memories: list[dict[str, Any]] = []
+    golden_rules: list[dict[str, Any]] = []
+
+    # First, collect golden rules (they get priority)
+    for memory in all_golden_rules:
+        if memory["id"] not in seen_ids:
+            seen_ids.add(memory["id"])
+            golden_rules.append(memory)
+
+    # Then collect other memories, excluding golden rules
     for memory in all_memories:
         if memory["id"] not in seen_ids:
             seen_ids.add(memory["id"])
@@ -478,7 +529,20 @@ async def memory_context(
     current_tokens += estimate_tokens(header)
     sections.append(header)
 
-    # Process sections in priority order
+    # Golden Rules section - always included, NOT subject to token budget
+    # These are constitutional principles that must always be visible
+    if golden_rules:
+        golden_section = "## Golden Rules\n\n"
+        for memory in golden_rules:
+            content = memory.get("content", "")
+            namespace = memory.get("namespace", "global")
+            source = "[global]" if namespace == "global" else f"[{namespace}]"
+            golden_section += f"- {content} {source}\n"
+        golden_section += "\n"
+        sections.append(golden_section)
+        # Golden rules don't count against token budget - they're mandatory
+
+    # Process regular sections in priority order (these respect token budget)
     section_data = [
         ("## Preferences\n\n", preferences),
         ("## Recent Decisions\n\n", decisions),
@@ -533,6 +597,24 @@ class ForgetResult:
     error: Optional[str] = None
 
 
+def _is_golden_rule(memory: dict[str, Any]) -> bool:
+    """Check if a memory qualifies as a golden rule.
+
+    A memory is a golden rule if:
+    - Its type is 'golden_rule', OR
+    - Its confidence is >= 0.9
+
+    Args:
+        memory: Memory dict to check
+
+    Returns:
+        True if the memory is a golden rule
+    """
+    mem_type = memory.get("type", "session")
+    confidence = memory.get("confidence", 0.3)
+    return mem_type == "golden_rule" or confidence >= 0.9
+
+
 async def memory_forget(
     store: HybridStore,
     memory_id: Optional[str] = None,
@@ -540,6 +622,7 @@ async def memory_forget(
     namespace: Optional[str] = None,
     n_results: int = 5,
     confirm: bool = True,
+    force: bool = False,
 ) -> ForgetResult:
     """Delete memories by ID or semantic search.
 
@@ -550,6 +633,9 @@ async def memory_forget(
     Deletion is atomic - memories are removed from both SQLite and ChromaDB
     via HybridStore.delete_memory().
 
+    Golden rules (type=golden_rule or confidence >= 0.9) are protected from
+    deletion unless force=True is specified.
+
     Args:
         store: HybridStore instance for storage operations
         memory_id: Specific memory ID to delete (direct deletion mode)
@@ -557,6 +643,7 @@ async def memory_forget(
         namespace: Filter deletion to specific namespace (optional)
         n_results: Number of search results to delete when using query mode (default: 5)
         confirm: If True, proceed with deletion (for future confirmation support)
+        force: If True, allow deletion of golden rules (default: False)
 
     Returns:
         ForgetResult with success status, deleted IDs, count, or error message
@@ -570,6 +657,8 @@ async def memory_forget(
         >>> result = await memory_forget(store, memory_id="mem_123")
         >>> # Semantic search deletion
         >>> result = await memory_forget(store, query="outdated preferences", n_results=3)
+        >>> # Force delete a golden rule
+        >>> result = await memory_forget(store, memory_id="golden_123", force=True)
     """
     # Validate inputs - must provide either memory_id or query
     if memory_id is None and query is None:
@@ -610,6 +699,14 @@ async def memory_forget(
                     error=f"Memory '{memory_id}' not in namespace '{namespace}'",
                 )
 
+            # Check golden rule protection
+            if _is_golden_rule(memory) and not force:
+                return ForgetResult(
+                    success=False,
+                    error=f"Memory '{memory_id}' is a golden rule and cannot be deleted. "
+                    "Use force=True to override this protection.",
+                )
+
             # Delete the memory
             deleted = await store.delete_memory(memory_id)
             if deleted:
@@ -633,9 +730,16 @@ async def memory_forget(
                     deleted_count=0,
                 )
 
-            # Delete each matching memory
+            # Delete each matching memory (skip golden rules unless force=True)
+            skipped_golden: list[str] = []
             for result in search_results:
                 mem_id = result["id"]
+
+                # Check golden rule protection
+                if _is_golden_rule(result) and not force:
+                    skipped_golden.append(mem_id)
+                    continue
+
                 try:
                     deleted = await store.delete_memory(mem_id)
                     if deleted:
@@ -643,6 +747,14 @@ async def memory_forget(
                 except Exception:
                     # Continue with other deletions even if one fails
                     pass
+
+            # If all results were golden rules, return error
+            if skipped_golden and not deleted_ids:
+                return ForgetResult(
+                    success=False,
+                    error=f"All matching memories are golden rules and cannot be deleted. "
+                    f"Skipped: {skipped_golden}. Use force=True to override this protection.",
+                )
 
         return ForgetResult(
             success=True,
@@ -745,3 +857,262 @@ def memory_relate(
     )
 
     return edge_id
+
+
+async def _check_golden_promotion(
+    store: HybridStore,
+    memory_id: str,
+    new_confidence: float,
+) -> bool:
+    """Check and perform golden rule promotion if eligible.
+
+    Promotes a memory to GOLDEN_RULE type when confidence reaches 0.9.
+    Only PREFERENCE, DECISION, and PATTERN types can be promoted.
+    Original type is preserved in metadata.promoted_from.
+
+    Args:
+        store: HybridStore instance for storage operations
+        memory_id: ID of the memory to check
+        new_confidence: The updated confidence score
+
+    Returns:
+        True if memory was promoted, False otherwise
+    """
+    if new_confidence < 0.9:
+        return False
+
+    # Fetch the memory to check its type
+    memory = await store.get_memory(memory_id)
+    if memory is None:
+        return False
+
+    current_type = memory.get("type", "session")
+
+    # Only these types can be promoted to golden rule
+    promotable_types = {"preference", "decision", "pattern"}
+    if current_type not in promotable_types:
+        return False
+
+    # Already a golden rule
+    if current_type == "golden_rule":
+        return False
+
+    # Preserve original type in metadata
+    metadata = memory.get("metadata") or {}
+    if isinstance(metadata, str):
+        import json
+        try:
+            metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            metadata = {}
+
+    metadata["promoted_from"] = current_type
+
+    # Update to golden rule type
+    await store.update_memory(
+        memory_id,
+        memory_type="golden_rule",
+        metadata=metadata,
+    )
+
+    return True
+
+
+async def memory_validate(
+    store: HybridStore,
+    memory_id: str,
+    success: bool,
+    adjustment: float = 0.1,
+) -> ValidateResult:
+    """Validate a memory and adjust its confidence score.
+
+    Adjusts confidence based on whether the memory was useful:
+    - Success: confidence += adjustment (max 1.0)
+    - Failure: confidence -= adjustment * 1.5 (min 0.0)
+
+    Automatically promotes to GOLDEN_RULE when confidence reaches 0.9.
+
+    Args:
+        store: HybridStore instance for storage operations
+        memory_id: ID of the memory to validate
+        success: Whether the memory application was successful
+        adjustment: Base confidence adjustment (default: 0.1)
+
+    Returns:
+        ValidateResult with old/new confidence, promotion status, or error
+
+    Example:
+        >>> result = await memory_validate(store, "mem_123", success=True)
+        >>> print(f"Confidence: {result.old_confidence} -> {result.new_confidence}")
+    """
+    # Validate adjustment range
+    if not 0.0 <= adjustment <= 1.0:
+        return ValidateResult(
+            success=False,
+            error=f"Adjustment must be between 0.0 and 1.0, got {adjustment}",
+        )
+
+    # Fetch the memory
+    memory = await store.get_memory(memory_id)
+    if memory is None:
+        return ValidateResult(
+            success=False,
+            error=f"Memory '{memory_id}' not found",
+        )
+
+    old_confidence = memory.get("confidence", 0.3)
+
+    # Calculate new confidence
+    if success:
+        new_confidence = min(1.0, old_confidence + adjustment)
+    else:
+        # Failure reduces confidence faster (1.5x adjustment)
+        new_confidence = max(0.0, old_confidence - (adjustment * 1.5))
+
+    # Update the memory's confidence
+    await store.update_memory(memory_id, confidence=new_confidence)
+
+    # Check for golden rule promotion
+    promoted = await _check_golden_promotion(store, memory_id, new_confidence)
+
+    return ValidateResult(
+        success=True,
+        memory_id=memory_id,
+        old_confidence=old_confidence,
+        new_confidence=new_confidence,
+        promoted=promoted,
+    )
+
+
+async def memory_apply(
+    store: HybridStore,
+    memory_id: str,
+    context: str,
+    session_id: Optional[str] = None,
+) -> ApplyResult:
+    """Record that a memory is being applied.
+
+    Creates a validation event to track when a memory is used in practice.
+    This starts the TRY phase of the validation loop.
+
+    Args:
+        store: HybridStore instance for storage operations
+        memory_id: ID of the memory being applied
+        context: Description of how/where the memory is being applied
+        session_id: Optional session identifier
+
+    Returns:
+        ApplyResult with event ID or error
+
+    Example:
+        >>> result = await memory_apply(
+        ...     store, "mem_123",
+        ...     context="Applying dark mode preference to UI settings"
+        ... )
+        >>> if result.success:
+        ...     # Later record the outcome
+        ...     await memory_outcome(store, "mem_123", success=True)
+    """
+    # Verify memory exists
+    memory = await store.get_memory(memory_id)
+    if memory is None:
+        return ApplyResult(
+            success=False,
+            error=f"Memory '{memory_id}' not found",
+        )
+
+    try:
+        # Record the 'applied' event
+        event_id = store.add_validation_event(
+            memory_id=memory_id,
+            event_type="applied",
+            context=context,
+            session_id=session_id,
+        )
+
+        # Update accessed_at timestamp
+        await store.update_memory(memory_id)  # This updates accessed_at automatically
+
+        return ApplyResult(
+            success=True,
+            memory_id=memory_id,
+            event_id=event_id,
+        )
+
+    except Exception as e:
+        return ApplyResult(
+            success=False,
+            error=f"Failed to record memory application: {e}",
+        )
+
+
+async def memory_outcome(
+    store: HybridStore,
+    memory_id: str,
+    success: bool,
+    error_msg: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> OutcomeResult:
+    """Record the outcome of a memory application and adjust confidence.
+
+    Records whether applying a memory succeeded or failed, creating a
+    validation event and adjusting confidence accordingly.
+
+    Args:
+        store: HybridStore instance for storage operations
+        memory_id: ID of the memory that was applied
+        success: Whether the application was successful
+        error_msg: Optional error message if failed
+        session_id: Optional session identifier
+
+    Returns:
+        OutcomeResult with updated confidence and promotion status
+
+    Example:
+        >>> # After applying a memory and observing the result
+        >>> result = await memory_outcome(store, "mem_123", success=False,
+        ...     error_msg="User rejected the suggestion")
+        >>> print(f"New confidence: {result.new_confidence}")
+    """
+    # Verify memory exists
+    memory = await store.get_memory(memory_id)
+    if memory is None:
+        return OutcomeResult(
+            success=False,
+            error=f"Memory '{memory_id}' not found",
+        )
+
+    try:
+        # Record the outcome event
+        event_type = "succeeded" if success else "failed"
+        context = error_msg if error_msg else ("Success" if success else "Failed")
+
+        store.add_validation_event(
+            memory_id=memory_id,
+            event_type=event_type,
+            context=context,
+            session_id=session_id,
+        )
+
+        # Adjust confidence via memory_validate
+        validate_result = await memory_validate(store, memory_id, success)
+
+        if not validate_result.success:
+            return OutcomeResult(
+                success=False,
+                error=validate_result.error,
+            )
+
+        return OutcomeResult(
+            success=True,
+            memory_id=memory_id,
+            outcome_success=success,
+            new_confidence=validate_result.new_confidence,
+            promoted=validate_result.promoted,
+        )
+
+    except Exception as e:
+        return OutcomeResult(
+            success=False,
+            error=f"Failed to record outcome: {e}",
+        )

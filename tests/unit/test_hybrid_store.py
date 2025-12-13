@@ -135,6 +135,7 @@ class TestAddMemory:
             memory_type="fact",
             namespace="default",
             importance=0.8,
+            confidence=0.3,
             metadata=None,
             memory_id=None,
         )
