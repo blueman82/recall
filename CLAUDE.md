@@ -31,9 +31,10 @@ src/recall/
 ├── __init__.py          # Package entry point
 ├── __main__.py          # MCP server with FastMCP tools
 ├── config.py            # Pydantic Settings configuration
+├── validation.py        # Contradiction detection, auto-supersede
 ├── memory/
-│   ├── types.py         # Memory, Edge, MemoryType, RelationType
-│   └── operations.py    # store, recall, relate, context, forget
+│   ├── types.py         # Memory, Edge, MemoryType, RelationType, confidence
+│   └── operations.py    # store, recall, relate, context, forget, validate, apply, outcome
 ├── storage/
 │   ├── sqlite.py        # SQLite store implementation
 │   ├── chromadb.py      # ChromaDB store implementation
@@ -49,6 +50,8 @@ src/recall/
 - `decision` - Design or implementation decisions
 - `pattern` - Recognized patterns or recurring behaviors
 - `session` - Session-related information
+- `file_context` - File activity tracking (what files were touched)
+- `golden_rule` - High-confidence memories (constitutional principles)
 
 **RelationType** (enum):
 - `relates_to` - General relationship
@@ -60,9 +63,25 @@ src/recall/
 - `global` - Cross-project memories
 - `project:{name}` - Project-scoped memories
 
+**Confidence Score**:
+- Range: 0.0 to 1.0 (default: 0.3)
+- Validated through usage via the validation loop
+- Success increases confidence, failure decreases it
+- Memories at confidence >= 0.9 are golden rules
+
+### Golden Rules
+
+Golden rules are high-confidence memories that represent validated, constitutional principles:
+
+- **Auto-promotion**: Memories with confidence >= 0.9 are automatically promoted to `golden_rule` type
+- **Eligible types**: Only `preference`, `decision`, and `pattern` can be promoted
+- **Protected**: Golden rules cannot be deleted unless `force=True` is specified
+- **Always visible**: Appear in context regardless of token budget or recency
+- **Original type preserved**: Stored in `metadata.promoted_from`
+
 ## MCP Tools
 
-The server exposes 5 tools via FastMCP:
+The server exposes 11 tools via FastMCP:
 
 ### memory_store_tool
 Store a new memory with semantic indexing and deduplication.
@@ -77,7 +96,98 @@ Create a relationship between two memories.
 Fetch and format relevant memories for context injection.
 
 ### memory_forget_tool
-Delete memories by ID or semantic search.
+Delete memories by ID or semantic search. Golden rules are protected from deletion.
+
+### memory_validate_tool
+Validate a memory and adjust its confidence score based on success/failure.
+
+### memory_apply_tool
+Record that a memory is being applied (TRY phase of validation loop).
+
+### memory_outcome_tool
+Record the outcome of applying a memory (LEARN phase of validation loop).
+
+### file_activity_add
+Record file activity events (used by PostToolUse hooks).
+
+### file_activity_recent
+Get recently accessed files with aggregated activity.
+
+## Validation Loop (ELF-Inspired)
+
+Recall implements a validation loop to build confidence in memories through practical use:
+
+```
+TRY → BREAK → ANALYZE → LEARN
+ ↑                        ↓
+ └────────────────────────┘
+```
+
+### Workflow
+
+1. **TRY** - Apply a memory using `memory_apply_tool`
+   - Records an "applied" validation event
+   - Updates access timestamp
+
+2. **BREAK** - Memory application either succeeds or fails
+   - Success: Memory was useful and correct
+   - Failure: Memory led to errors or was rejected
+
+3. **ANALYZE** - Evaluate what happened
+   - Collect error messages and context
+   - Determine if memory was helpful
+
+4. **LEARN** - Update confidence using `memory_outcome_tool`
+   - Success: `confidence += 0.1` (max 1.0)
+   - Failure: `confidence -= 0.15` (min 0.0)
+   - Auto-promote to golden rule at confidence >= 0.9
+
+### Example Usage
+
+```python
+# 1. TRY: Apply a memory
+result = await memory_apply_tool(
+    memory_id="mem_123",
+    context="Using dark mode preference for UI settings",
+    session_id="session_456"
+)
+
+# 2. BREAK: Attempt to use the memory
+# ... application code ...
+
+# 3. ANALYZE: Check if it worked
+success = (error_count == 0)
+
+# 4. LEARN: Record the outcome
+outcome = await memory_outcome_tool(
+    memory_id="mem_123",
+    success=success,
+    error_msg="User rejected setting" if not success else None,
+    session_id="session_456"
+)
+
+# Check if promoted to golden rule
+if outcome["promoted"]:
+    print(f"Memory promoted to golden rule! Confidence: {outcome['new_confidence']}")
+```
+
+### Contradiction Detection
+
+The validation system also detects contradictions between memories:
+
+- **Semantic similarity**: ChromaDB finds similar memories (threshold: 0.7)
+- **LLM reasoning**: Ollama determines if they actually contradict
+- **Edge creation**: `CONTRADICTS` edges link conflicting memories
+- **Auto-supersede**: Better-performing memories replace worse ones
+
+### File Activity Tracking
+
+Files accessed during tool operations are automatically tracked:
+
+- **Action types**: `read`, `write`, `edit`, `multiedit`
+- **Project context**: Grouped by project root directory
+- **File type detection**: Automatically inferred from extension
+- **Recent files**: Query by project and time window
 
 ## Configuration
 
@@ -94,6 +204,7 @@ Settings are loaded via Pydantic Settings with `RECALL_` prefix:
 | RECALL_LOG_LEVEL | INFO | Logging level |
 | RECALL_DEFAULT_NAMESPACE | global | Default namespace |
 | RECALL_DEFAULT_IMPORTANCE | 0.5 | Default importance score |
+| RECALL_DEFAULT_CONFIDENCE | 0.3 | Default confidence score |
 | RECALL_DEFAULT_TOKEN_BUDGET | 4000 | Default token budget |
 
 ## Testing
@@ -115,7 +226,7 @@ uv run pytest tests/integration/test_mcp_server.py::TestMCPToolHandlers
 ## Development Patterns
 
 ### Async Operations
-All memory operations (store, recall, forget, context) are async. Use `await` when calling.
+All memory operations (store, recall, forget, context, validate, apply, outcome) are async. Use `await` when calling.
 
 ### Error Handling
 Operations return result objects with `success` boolean and optional `error` message.
@@ -126,9 +237,18 @@ Content is hashed (SHA-256, truncated to 16 chars) for deduplication within name
 ### Graph Expansion
 Set `include_related=True` in recall to follow relationship edges.
 
+### Confidence Building
+- Memories start at confidence 0.3 by default
+- Use the validation loop to build confidence through practical application
+- Golden rules (confidence >= 0.9) gain special protection and visibility
+- Low-confidence memories (< 0.15) are candidates for deletion
+
 ## Important Notes
 
 - **STDIO Transport**: MCP uses stdio - all logging goes to stderr, never stdout
-- **Ollama Dependency**: Requires Ollama running locally with mxbai-embed-large model
+- **Ollama Dependencies**:
+  - `mxbai-embed-large` model for embeddings (required)
+  - `llama3.2` model for contradiction detection and auto-supersede (optional)
 - **Signal Handling**: SIGINT/SIGTERM trigger graceful shutdown
 - **Python 3.13+**: Requires Python 3.13 or later
+- **Golden Rule Protection**: Golden rules cannot be deleted without `force=True` flag

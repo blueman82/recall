@@ -98,6 +98,32 @@ class RecallSettings(BaseSettings):
         description="Default token budget for context generation",
     )
 
+    # Monitoring configuration
+    monitor_enabled: bool = Field(
+        default=False,
+        description="Enable background monitoring",
+    )
+    monitor_interval: int = Field(
+        default=30,
+        description="Monitoring interval in seconds",
+    )
+    haiku_model: str = Field(
+        default="claude-3-5-haiku-20241022",
+        description="Model for quick checks",
+    )
+    opus_model: str = Field(
+        default="claude-opus-4-20250514",
+        description="Model for deep analysis",
+    )
+    anthropic_api_key: Optional[str] = Field(
+        default=None,
+        description="Anthropic API key for monitoring",
+    )
+    ollama_monitor_model: str = Field(
+        default="llama3.2",
+        description="Local Ollama model for monitoring",
+    )
+
     def get_sqlite_path(self) -> Optional[Path]:
         """Get the SQLite path, resolving to default if not set."""
         if self.sqlite_path:

@@ -26,6 +26,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
@@ -52,6 +53,30 @@ def get_project_namespace() -> str:
             return f"project:{project_name}"
 
     return "global"
+
+
+def get_project_root() -> str | None:
+    """Get the project root directory.
+
+    Returns:
+        Project root path string or None if not in a project
+    """
+    cwd = os.getcwd()
+
+    # Check for common project indicators
+    project_indicators = [
+        ".git",
+        "pyproject.toml",
+        "package.json",
+        "Cargo.toml",
+        "go.mod",
+    ]
+
+    for indicator in project_indicators:
+        if Path(cwd, indicator).exists():
+            return cwd
+
+    return None
 
 
 def call_recall(tool_name: str, args: dict) -> dict:
@@ -122,6 +147,105 @@ def call_recall(tool_name: str, args: dict) -> dict:
         return {"success": False, "error": str(e)}
 
 
+def format_recent_files(files: list[dict]) -> str:
+    """Format recent files as markdown list.
+
+    Args:
+        files: List of file activity dicts from get_recent_files()
+
+    Returns:
+        Formatted markdown string
+    """
+    if not files:
+        return ""
+
+    lines = ["## Recent Files\n"]
+
+    for file_info in files:
+        file_path = file_info.get("file_path", "")
+        last_action = file_info.get("last_action", "accessed")
+        last_accessed = file_info.get("last_accessed", 0)
+
+        # Convert timestamp to relative time
+        try:
+            accessed_time = datetime.fromtimestamp(last_accessed)
+            now = datetime.now()
+            delta = now - accessed_time
+
+            if delta.days == 0:
+                time_str = "today"
+            elif delta.days == 1:
+                time_str = "yesterday"
+            else:
+                time_str = f"{delta.days} days ago"
+        except (ValueError, OSError):
+            time_str = "recently"
+
+        lines.append(f"- {file_path} ({last_action} {time_str})")
+
+    return "\n".join(lines)
+
+
+def call_get_recent_files(project_root: str | None) -> list[dict]:
+    """Call the recall internal API to get recent files.
+
+    Args:
+        project_root: Project root path or None
+
+    Returns:
+        List of file activity dicts
+    """
+    try:
+        # Import recall modules directly for internal API access
+        recall_paths = [
+            Path(__file__).parent.parent,
+            Path.home() / ".local" / "share" / "recall",
+            Path("/opt/recall"),
+        ]
+
+        recall_dir = None
+        for path in recall_paths:
+            if (path / "src" / "recall").exists():
+                recall_dir = path
+                break
+
+        if recall_dir is None:
+            return []
+
+        # Add src to sys.path temporarily
+        src_path = str(recall_dir / "src")
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+
+        # Import and use HybridStore
+        from recall.config import settings
+        from recall.storage.hybrid import HybridStore
+
+        # Create store and get recent files
+        import asyncio
+
+        async def _get_files():
+            async with HybridStore.create(
+                sqlite_path=settings.sqlite_path,
+                chroma_path=settings.chroma_path,
+                collection_name=settings.collection_name,
+                ollama_host=settings.ollama_host,
+                ollama_model=settings.ollama_model,
+            ) as store:
+                return store.get_recent_files(
+                    project_root=project_root,
+                    limit=10,
+                    days=14,
+                )
+
+        return asyncio.run(_get_files())
+
+    except Exception as e:
+        # Silently fail - this is optional context
+        print(f"<!-- Error getting recent files: {e} -->", file=sys.stderr)
+        return []
+
+
 def main():
     """Main hook entry point.
 
@@ -129,8 +253,9 @@ def main():
     All errors are caught to prevent blocking Claude Code.
     """
     try:
-        # Determine project namespace
+        # Determine project namespace and root
         namespace = get_project_namespace()
+        project_root = get_project_root()
 
         # Call memory_context tool
         result = call_recall("memory_context", {
@@ -138,14 +263,30 @@ def main():
             "token_budget": 4000,
         })
 
+        # Collect output sections
+        output_sections = []
+
+        # Add memory context if available
         if result.get("success") and result.get("context"):
             context = result["context"]
             # Only output if there's actual content
             if context and context.strip() and context != "# Memory Context\n\n_No memories found._":
-                print(context)
-                print()  # blank line
-                print("---")
-                print("**Memory tip:** When you notice user preferences, technical decisions, or patterns worth remembering, use `memory_store_tool` to save them.")
+                output_sections.append(context)
+
+        # Add recent files if in a project
+        if project_root:
+            recent_files = call_get_recent_files(project_root)
+            if recent_files:
+                files_section = format_recent_files(recent_files)
+                if files_section:
+                    output_sections.append(files_section)
+
+        # Output all sections
+        if output_sections:
+            print("\n\n".join(output_sections))
+            print()  # blank line
+            print("---")
+            print("**Memory tip:** When you notice user preferences, technical decisions, or patterns worth remembering, use `memory_store_tool` to save them.")
 
     except Exception as e:
         # Silently fail - don't block Claude Code

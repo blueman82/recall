@@ -46,6 +46,11 @@ from recall.memory.operations import (
 )
 from recall.memory.types import MemoryType, RelationType
 from recall.storage.hybrid import HybridStore
+from recall.validation import (
+    analyze_memory_health,
+    check_supersedes,
+    detect_contradictions,
+)
 
 # Initialize FastMCP server
 mcp = FastMCP("recall")
@@ -737,6 +742,141 @@ async def memory_outcome_tool(
 
 
 # =============================================================================
+# MCP Tool Handlers - Validation & Analysis
+# =============================================================================
+
+
+@mcp.tool()
+async def memory_detect_contradictions(
+    memory_id: str,
+    similarity_threshold: float = 0.7,
+    create_edges: bool = True,
+) -> dict[str, Any]:
+    """Detect memories that contradict a given memory.
+
+    Uses semantic search to find similar memories, then LLM reasoning
+    to determine if they actually contradict each other.
+
+    Args:
+        memory_id: ID of the memory to check for contradictions
+        similarity_threshold: Minimum similarity for considering contradictions (default: 0.7)
+        create_edges: Whether to create CONTRADICTS edges (default: True)
+
+    Returns:
+        Result with list of contradicting memory IDs and edges created
+    """
+    if hybrid_store is None:
+        return {"success": False, "error": "Server not initialized"}
+
+    try:
+        result = await detect_contradictions(
+            store=hybrid_store,
+            memory_id=memory_id,
+            similarity_threshold=similarity_threshold,
+            create_edges=create_edges,
+        )
+
+        return {
+            "success": result.error is None,
+            "memory_id": result.memory_id,
+            "contradictions": result.contradictions,
+            "edges_created": result.edges_created,
+            "error": result.error,
+        }
+
+    except Exception as e:
+        logger.error(f"memory_detect_contradictions failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def memory_check_supersedes(
+    memory_id: str,
+    create_edge: bool = True,
+) -> dict[str, Any]:
+    """Check if a memory should supersede another based on validation history.
+
+    A newer memory supersedes an older one when it consistently succeeds
+    where the older one failed on similar topics.
+
+    Args:
+        memory_id: ID of the (potentially newer) memory to check
+        create_edge: Whether to create SUPERSEDES edge (default: True)
+
+    Returns:
+        Result with superseded memory ID if applicable
+    """
+    if hybrid_store is None:
+        return {"success": False, "error": "Server not initialized"}
+
+    try:
+        result = await check_supersedes(
+            store=hybrid_store,
+            memory_id=memory_id,
+            create_edge=create_edge,
+        )
+
+        return {
+            "success": result.error is None,
+            "memory_id": result.memory_id,
+            "superseded_id": result.superseded_id,
+            "edge_created": result.edge_created,
+            "reason": result.reason,
+            "error": result.error,
+        }
+
+    except Exception as e:
+        logger.error(f"memory_check_supersedes failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def memory_analyze_health(
+    namespace: Optional[str] = None,
+    include_contradictions: bool = True,
+    include_low_confidence: bool = True,
+    include_stale: bool = True,
+    stale_days: int = 30,
+) -> dict[str, Any]:
+    """Analyze the health of memories in the system.
+
+    Checks for unresolved contradictions, low-confidence memories,
+    and stale memories that haven't been validated recently.
+
+    Args:
+        namespace: Limit analysis to specific namespace (optional)
+        include_contradictions: Check for contradictions (default: True)
+        include_low_confidence: Find low-confidence memories (default: True)
+        include_stale: Find stale memories (default: True)
+        stale_days: Days without validation to consider stale (default: 30)
+
+    Returns:
+        Dictionary with categorized issues and recommendations
+    """
+    if hybrid_store is None:
+        return {"success": False, "error": "Server not initialized"}
+
+    try:
+        issues = await analyze_memory_health(
+            store=hybrid_store,
+            namespace=namespace,
+            include_contradictions=include_contradictions,
+            include_low_confidence=include_low_confidence,
+            include_stale=include_stale,
+            stale_days=stale_days,
+        )
+
+        return {
+            "success": True,
+            **issues,
+        }
+
+    except Exception as e:
+        logger.error(f"memory_analyze_health failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
 # Direct Tool Invocation (for hooks)
 # =============================================================================
 
@@ -776,6 +916,9 @@ async def call_tool_directly(
         "memory_validate": memory_validate_tool,
         "memory_apply": memory_apply_tool,
         "memory_outcome": memory_outcome_tool,
+        "memory_detect_contradictions": memory_detect_contradictions,
+        "memory_check_supersedes": memory_check_supersedes,
+        "memory_analyze_health": memory_analyze_health,
         "file_activity_add": file_activity_add,
         "file_activity_recent": file_activity_recent,
     }
