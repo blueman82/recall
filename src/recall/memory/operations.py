@@ -529,6 +529,17 @@ async def memory_context(
     current_tokens += estimate_tokens(header)
     sections.append(header)
 
+    # RFC 2119 preamble - defines semantics for requirement keywords
+    # This ensures the consuming LLM knows MUST/SHOULD/MAY have precise meanings
+    rfc2119_preamble = (
+        "The key words \"MUST\", \"MUST NOT\", \"REQUIRED\", \"SHALL\", \"SHALL NOT\", "
+        "\"SHOULD\", \"SHOULD NOT\", \"RECOMMENDED\", \"MAY\", and \"OPTIONAL\" in these "
+        "memories are to be interpreted as described in RFC 2119.\n\n"
+        "---\n\n"
+    )
+    current_tokens += estimate_tokens(rfc2119_preamble)
+    sections.append(rfc2119_preamble)
+
     # Golden Rules section - always included, NOT subject to token budget
     # These are constitutional principles that must always be visible
     if golden_rules:

@@ -79,9 +79,39 @@ Golden rules are high-confidence memories that represent validated, constitution
 - **Always visible**: Appear in context regardless of token budget or recency
 - **Original type preserved**: Stored in `metadata.promoted_from`
 
+## RFC 2119 Requirement Language
+
+Memories in Recall follow [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) semantics for requirement keywords. When writing memories, use these keywords with their precise meanings:
+
+| Keyword | Meaning | Use For |
+|---------|---------|---------|
+| **MUST** / **REQUIRED** / **SHALL** | Absolute requirement | Hard rules that cannot be ignored |
+| **MUST NOT** / **SHALL NOT** | Absolute prohibition | Actions that are never allowed |
+| **SHOULD** / **RECOMMENDED** | Strong suggestion, exceptions require justification | Preferences with valid escape hatches |
+| **SHOULD NOT** / **NOT RECOMMENDED** | Strong discouragement | Generally avoid unless justified |
+| **MAY** / **OPTIONAL** | Truly optional | Nice-to-haves |
+
+### Writing Effective Memories
+
+**Weak (avoid):**
+```
+User prefers pytest over unittest
+```
+
+**Strong (preferred):**
+```
+You MUST use pytest for all tests. You MUST NOT use unittest.
+```
+
+### Why This Matters
+
+Soft language ("prefers", "wants", "likes") gets rationalized and ignored under time pressure. RFC 2119 keywords have defined semantics that are harder to bypass.
+
+The `memory_context_tool` automatically injects an RFC 2119 preamble so the consuming LLM knows these keywords have precise meanings.
+
 ## MCP Tools
 
-The server exposes 11 tools via FastMCP:
+The server exposes 16 tools via FastMCP:
 
 ### memory_store_tool
 Store a new memory with semantic indexing and deduplication.
@@ -106,6 +136,15 @@ Record that a memory is being applied (TRY phase of validation loop).
 
 ### memory_outcome_tool
 Record the outcome of applying a memory (LEARN phase of validation loop).
+
+### memory_count_tool
+Count memories with optional namespace and type filters.
+
+### memory_list_tool
+List memories with filtering and pagination support.
+
+### validation_history_tool
+Get validation event history for a memory to understand confidence changes.
 
 ### file_activity_add
 Record file activity events (used by PostToolUse hooks).
