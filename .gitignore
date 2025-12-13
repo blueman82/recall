@@ -49,3 +49,6 @@ logs/
 
 # Conductor (local orchestration)
 .conductor/
+
+# Claude Code session transcripts
+transcripts/
