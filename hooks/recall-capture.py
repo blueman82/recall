@@ -18,9 +18,14 @@ Usage:
         }
     }
 
-Environment:
-    CLAUDE_TRANSCRIPT_PATH: Path to session transcript (set by Claude Code)
-    CLAUDE_SESSION_ID: Unique session identifier (set by Claude Code)
+Input (via stdin JSON from Claude Code):
+    {
+        "session_id": "abc123",
+        "transcript_path": "~/.claude/projects/.../session.jsonl",
+        "cwd": "/path/to/project",
+        "hook_event_name": "SessionEnd",
+        "reason": "exit"
+    }
 
 The hook reads the transcript, summarizes it with Ollama, and stores
 relevant memories. Failures are handled gracefully.
@@ -32,6 +37,28 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
+
+
+def read_hook_input() -> dict:
+    """Read hook input from stdin.
+
+    Claude Code passes hook data as JSON via stdin.
+
+    Returns:
+        Dictionary with hook input data, or empty dict if unavailable
+    """
+    try:
+        # Check if stdin has data (non-blocking check)
+        if sys.stdin.isatty():
+            return {}
+
+        stdin_data = sys.stdin.read()
+        if stdin_data:
+            return json.loads(stdin_data)
+    except (json.JSONDecodeError, IOError):
+        pass
+
+    return {}
 
 
 def get_project_namespace() -> str:
@@ -58,19 +85,21 @@ def get_project_namespace() -> str:
     return "global"
 
 
-def read_transcript() -> Optional[str]:
-    """Read session transcript from Claude Code environment.
+def read_transcript(transcript_path: Optional[str]) -> Optional[str]:
+    """Read session transcript from provided path.
+
+    Args:
+        transcript_path: Path to the transcript file (from hook input)
 
     Returns:
         Transcript content or None if unavailable
     """
-    transcript_path = os.environ.get("CLAUDE_TRANSCRIPT_PATH")
-
     if not transcript_path:
         return None
 
     try:
-        path = Path(transcript_path)
+        # Expand ~ to home directory
+        path = Path(transcript_path).expanduser()
         if path.exists():
             return path.read_text()
     except Exception:
@@ -115,7 +144,8 @@ JSON output:"""
 
     try:
         result = subprocess.run(
-            ["ollama", "run", model, prompt],
+            ["ollama", "run", model],
+            input=prompt,
             capture_output=True,
             text=True,
             timeout=25,
@@ -279,22 +309,44 @@ def main():
     Reads transcript, summarizes with Ollama, and stores memories.
     All errors are caught to prevent blocking Claude Code.
     """
+    from datetime import datetime
+
+    # Read hook input from stdin (Claude Code passes JSON)
+    hook_input = read_hook_input()
+    session_id = hook_input.get("session_id", "unknown")
+    transcript_path = hook_input.get("transcript_path")
+    cwd = hook_input.get("cwd", os.getcwd())
+
+    # Log hook invocation for verification
+    log_path = Path.home() / ".claude" / "hooks" / "logs" / "recall-capture.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a") as f:
+        f.write(f"{datetime.now().isoformat()} | SessionEnd fired | session={session_id} | transcript={transcript_path}\n")
+
     try:
         # Read session transcript
-        transcript = read_transcript()
+        transcript = read_transcript(transcript_path)
 
         if not transcript or len(transcript) < 100:
             # No meaningful transcript to process
+            with open(log_path, "a") as f:
+                f.write(f"{datetime.now().isoformat()} | No transcript or too short | len={len(transcript) if transcript else 0}\n")
             return
 
-        # Determine project namespace
+        # Determine project namespace using cwd from hook input
+        os.chdir(cwd)  # Change to session's working directory
         namespace = get_project_namespace()
+
+        with open(log_path, "a") as f:
+            f.write(f"{datetime.now().isoformat()} | Processing transcript | len={len(transcript)} | namespace={namespace}\n")
 
         # Summarize with Ollama
         summary_json = summarize_with_ollama(transcript)
 
         if not summary_json:
             # Ollama not available or failed - skip silently
+            with open(log_path, "a") as f:
+                f.write(f"{datetime.now().isoformat()} | Ollama summarization failed\n")
             return
 
         # Parse memories
@@ -303,24 +355,32 @@ def main():
             if not isinstance(memories, list):
                 return
         except json.JSONDecodeError:
+            with open(log_path, "a") as f:
+                f.write(f"{datetime.now().isoformat()} | JSON parse failed | raw={summary_json[:200]}\n")
             return
 
         if not memories:
+            with open(log_path, "a") as f:
+                f.write(f"{datetime.now().isoformat()} | No memories extracted\n")
             return
 
         # Store memories
         stored = store_memories(memories, namespace)
 
-        # Optional: log for debugging
+        # Log result
+        with open(log_path, "a") as f:
+            f.write(f"{datetime.now().isoformat()} | Stored {stored} memories from session {session_id}\n")
+
         if stored > 0:
-            session_id = os.environ.get("CLAUDE_SESSION_ID", "unknown")
             print(
                 f"<!-- recall-capture: stored {stored} memories from session {session_id} -->",
                 file=sys.stderr,
             )
 
     except Exception as e:
-        # Silently fail - don't block Claude Code
+        # Log error but don't block Claude Code
+        with open(log_path, "a") as f:
+            f.write(f"{datetime.now().isoformat()} | ERROR: {e}\n")
         print(f"<!-- recall-capture hook error: {e} -->", file=sys.stderr)
 
 

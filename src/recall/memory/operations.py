@@ -354,40 +354,52 @@ async def memory_context(
     else:
         project_namespace = f"project:{project}" if not project.startswith("project:") else project
 
-    # Namespaces to query
-    namespaces = ["global", project_namespace]
-
-    # Collect memories from all namespaces
+    # Collect memories - prioritize project-specific, filter globals
     all_memories: list[dict[str, Any]] = []
 
-    for namespace in namespaces:
-        if query:
-            # Use semantic search if query provided
-            try:
-                search_results = await store.search(
-                    query=query,
-                    n_results=n_results,
-                    namespace=namespace,
-                )
-                all_memories.extend(search_results)
-            except Exception:
-                # Fallback to list if search fails
-                list_results = store.list_memories(
-                    namespace=namespace,
-                    limit=n_results,
-                    order_by="accessed_at",
-                    descending=True,
-                )
-                all_memories.extend(list_results)
-        else:
-            # List most recently accessed memories
-            list_results = store.list_memories(
-                namespace=namespace,
-                limit=n_results,
-                order_by="accessed_at",
-                descending=True,
+    # 1. Get ALL project-specific memories (these are always relevant)
+    project_memories = store.list_memories(
+        namespace=project_namespace,
+        limit=n_results,
+        order_by="accessed_at",
+        descending=True,
+    )
+    # Tag project memories for boosting
+    for mem in project_memories:
+        mem["_is_project"] = True
+    all_memories.extend(project_memories)
+
+    # 2. Get ONLY global PREFERENCES (user preferences apply everywhere)
+    #    Skip global patterns/decisions - they're usually project-specific context
+    global_memories = store.list_memories(
+        namespace="global",
+        limit=n_results,
+        order_by="importance",
+        descending=True,
+    )
+    # Filter to only preferences with importance >= 0.6
+    global_preferences = [
+        mem for mem in global_memories
+        if mem.get("type") == "preference" and mem.get("importance", 0.5) >= 0.6
+    ]
+    # Tag global memories
+    for mem in global_preferences:
+        mem["_is_project"] = False
+    all_memories.extend(global_preferences)
+
+    # 3. If query provided, also do semantic search for relevant globals
+    if query:
+        try:
+            search_results = await store.search(
+                query=query,
+                n_results=min(5, n_results),  # Limit semantic global results
+                namespace="global",
             )
-            all_memories.extend(list_results)
+            for mem in search_results:
+                mem["_is_project"] = False
+            all_memories.extend(search_results)
+        except Exception:
+            pass  # Semantic search failed, continue with what we have
 
     # Remove duplicates by ID
     seen_ids: set[str] = set()
@@ -405,6 +417,7 @@ async def memory_context(
         importance = memory.get("importance", 0.5)
         access_count = memory.get("access_count", 0)
         accessed_at = memory.get("accessed_at", now)
+        is_project = memory.get("_is_project", False)
 
         # Recency factor: decay based on time since last access
         # Using exponential decay with half-life of 7 days
@@ -417,6 +430,10 @@ async def memory_context(
         # Add 1 to access_count to handle log(0) case
         access_factor = math.log(access_count + 1) + 1  # +1 base so 0 accesses gives score > 0
         score = importance * recency_factor * access_factor
+
+        # BOOST: Project-specific memories get 3x priority over globals
+        if is_project:
+            score *= 3.0
 
         scored_memories.append((score, memory))
 
