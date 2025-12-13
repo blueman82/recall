@@ -367,17 +367,20 @@ Respond ONLY with a JSON object:
             # Build command with optimal flags:
             # -p: Print mode (non-interactive)
             # --output-format json: Structured JSON output
-            # --json-schema: Validates output against schema
             # --model: Specify model (opus for deep analysis)
-            # --tools "": Disable tools (pure reasoning task)
+            # --system-prompt: Override default to ensure JSON-only responses
             # --no-session-persistence: Don't save to history
+            system_prompt = (
+                "You are a JSON-only responder for memory system analysis. "
+                "Output valid JSON matching the requested schema. No explanations or markdown."
+            )
+
             cmd = [
                 claude_path,
                 "-p",
                 "--output-format", "json",
-                "--json-schema", json_schema,
                 "--model", model,
-                "--tools", "",
+                "--system-prompt", system_prompt,
                 "--no-session-persistence",
                 prompt,
             ]
