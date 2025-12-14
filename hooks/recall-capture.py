@@ -118,24 +118,38 @@ def summarize_with_ollama(transcript: str, model: str = "llama3.2") -> Optional[
     Returns:
         Summarized memories or None on failure
     """
-    # Truncate very long transcripts to last 8000 chars
-    if len(transcript) > 8000:
-        transcript = "...(truncated)...\n" + transcript[-8000:]
+    # Truncate very long transcripts to last 16000 chars (increased for better context)
+    if len(transcript) > 16000:
+        transcript = "...(truncated)...\n" + transcript[-16000:]
 
     prompt = f"""Analyze this Claude Code session transcript and extract key memories.
 
+IMPORTANT: Use RFC 2119 requirement language for all memories:
+- "You MUST..." for absolute requirements
+- "You MUST NOT..." for absolute prohibitions
+- "You SHOULD..." for strong recommendations
+- "Use X for Y" for decisions (imperative, not descriptive)
+
+DO NOT use soft language like "User prefers", "User wants", "User likes".
+Transform preferences into commands: "User prefers X" → "You MUST use X."
+
 For each memory, identify:
-1. Type: preference (user preferences), decision (technical decisions), pattern (recurring behaviors), or session (session-specific)
-2. Content: A clear, concise statement
+1. Type: preference, decision, pattern, or session
+2. Content: An imperative statement using RFC 2119 keywords
 
 Format output as JSON array:
 [
-  {{"type": "decision", "content": "Decided to use FastAPI for the backend"}},
-  {{"type": "preference", "content": "User prefers TypeScript over JavaScript"}}
+  {{"type": "decision", "content": "Use FastAPI for the backend. Do not use Flask or Django."}},
+  {{"type": "preference", "content": "You MUST use TypeScript for all code. You MUST NOT create JavaScript files."}},
+  {{"type": "pattern", "content": "You MUST write tests BEFORE implementation (TDD)."}}
 ]
 
-Only include significant, reusable memories. Skip trivial or one-off items.
-If no significant memories, return empty array: []
+Only include significant, reusable memories. Skip:
+- Trivial or one-off items
+- Information already captured in previous sessions
+- Implementation details (focus on decisions and preferences)
+
+If no significant NEW memories, return empty array: []
 
 Transcript:
 {transcript}
@@ -204,7 +218,11 @@ def call_recall(tool_name: str, args: dict) -> dict:
     """
     try:
         recall_paths = [
+            # User's development location
+            Path.home() / "Documents" / "Github" / "recall",
+            # Relative to this hook file (if hook is in recall repo)
             Path(__file__).parent.parent,
+            # Common install locations
             Path.home() / ".local" / "share" / "recall",
             Path("/opt/recall"),
         ]
@@ -253,23 +271,66 @@ def call_recall(tool_name: str, args: dict) -> dict:
         return {"success": False, "error": str(e)}
 
 
-def store_memories(memories: list, namespace: str) -> int:
-    """Store extracted memories in recall.
+def check_duplicate(content: str, namespace: str, threshold: float = 0.85) -> bool:
+    """Check if a similar memory already exists.
+
+    Args:
+        content: Memory content to check
+        namespace: Namespace to search in
+        threshold: Similarity threshold (0.0-1.0)
+
+    Returns:
+        True if a similar memory exists, False otherwise
+    """
+    try:
+        result = call_recall("memory_recall", {
+            "query": content,
+            "n_results": 1,
+            "namespace": namespace,
+        })
+
+        if not result.get("success") or not result.get("results"):
+            return False
+
+        # Check if top result is similar enough to be a duplicate
+        top_result = result["results"][0]
+        similarity = top_result.get("score", 0)
+
+        # Also check for exact content match (different similarity scoring)
+        existing_content = top_result.get("content", "")
+        if existing_content.strip().lower() == content.strip().lower():
+            return True
+
+        return similarity >= threshold
+
+    except Exception:
+        # On error, allow storage (fail open)
+        return False
+
+
+def store_memories(memories: list, namespace: str) -> tuple[int, int]:
+    """Store extracted memories in recall with deduplication.
 
     Args:
         memories: List of memory dicts with type and content
         namespace: Namespace for storage
 
     Returns:
-        Number of successfully stored memories
+        Tuple of (stored count, skipped duplicate count)
     """
     stored = 0
+    skipped = 0
 
     for memory in memories:
         memory_type = memory.get("type", "session")
         content = memory.get("content", "")
 
         if not content or len(content) < 10:
+            continue
+
+        # Check for duplicates before storing
+        if check_duplicate(content, namespace):
+            skipped += 1
             continue
 
         # Map simplified types to MemoryType enum values
@@ -282,10 +343,11 @@ def store_memories(memories: list, namespace: str) -> int:
         mem_type = type_map.get(memory_type, "session")
 
         # Determine importance based on type
+        # RFC 2119 MUST statements get higher importance
         importance_map = {
-            "preference": 0.7,
+            "preference": 0.8,  # Increased for RFC 2119 compliance
             "decision": 0.8,
-            "pattern": 0.6,
+            "pattern": 0.7,    # Increased for RFC 2119 compliance
             "session": 0.4,
         }
         importance = importance_map.get(mem_type, 0.5)
@@ -300,7 +362,7 @@ def store_memories(memories: list, namespace: str) -> int:
         if result.get("success"):
             stored += 1
 
-    return stored
+    return stored, skipped
 
 
 def main():
@@ -364,12 +426,12 @@ def main():
                 f.write(f"{datetime.now().isoformat()} | No memories extracted\n")
             return
 
-        # Store memories
-        stored = store_memories(memories, namespace)
+        # Store memories (with deduplication)
+        stored, skipped = store_memories(memories, namespace)
 
         # Log result
         with open(log_path, "a") as f:
-            f.write(f"{datetime.now().isoformat()} | Stored {stored} memories from session {session_id}\n")
+            f.write(f"{datetime.now().isoformat()} | Stored {stored} memories, skipped {skipped} duplicates from session {session_id}\n")
 
     except BrokenPipeError:
         # Claude Code closed connection before we finished - this is fine

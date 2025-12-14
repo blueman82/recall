@@ -2,8 +2,12 @@
 """Claude Code SessionStart hook for loading relevant memory context.
 
 This hook runs at the start of each Claude Code session and injects
-relevant memories as system context. It uses the recall MCP --call mode
-for direct, fast tool invocation without MCP protocol overhead.
+relevant memories as system context. It uses Ollama (llama3.2) for
+intelligent curation and synthesis of memories.
+
+Architecture:
+    Phase 1: Fetch raw memories via recall --call mode
+    Phase 2: Curate with Ollama for synthesis and prioritization
 
 Usage:
     Configure in ~/.claude/settings.json:
@@ -26,15 +30,15 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 
-def get_project_namespace() -> str:
-    """Derive project namespace from current working directory.
+def get_project_namespace() -> tuple[str, str]:
+    """Derive project namespace and name from current working directory.
 
     Returns:
-        Namespace string in format 'project:{name}' or 'global'
+        Tuple of (namespace string, project name)
     """
     cwd = os.getcwd()
     project_name = Path(cwd).name
@@ -50,40 +54,16 @@ def get_project_namespace() -> str:
 
     for indicator in project_indicators:
         if Path(cwd, indicator).exists():
-            return f"project:{project_name}"
+            return f"project:{project_name}", project_name
 
-    return "global"
-
-
-def get_project_root() -> str | None:
-    """Get the project root directory.
-
-    Returns:
-        Project root path string or None if not in a project
-    """
-    cwd = os.getcwd()
-
-    # Check for common project indicators
-    project_indicators = [
-        ".git",
-        "pyproject.toml",
-        "package.json",
-        "Cargo.toml",
-        "go.mod",
-    ]
-
-    for indicator in project_indicators:
-        if Path(cwd, indicator).exists():
-            return cwd
-
-    return None
+    return "global", project_name
 
 
 def call_recall(tool_name: str, args: dict) -> dict:
     """Call recall MCP tool directly via --call mode.
 
     Args:
-        tool_name: Name of the tool (memory_context, etc.)
+        tool_name: Name of the tool (memory_list_tool, etc.)
         args: Dictionary of tool arguments
 
     Returns:
@@ -92,7 +72,9 @@ def call_recall(tool_name: str, args: dict) -> dict:
     try:
         # Find the recall module - try multiple locations
         recall_paths = [
-            # Relative to this hook file
+            # User's development location
+            Path.home() / "Documents" / "Github" / "recall",
+            # Relative to this hook file (if hook is in recall repo)
             Path(__file__).parent.parent,
             # Common install locations
             Path.home() / ".local" / "share" / "recall",
@@ -125,7 +107,7 @@ def call_recall(tool_name: str, args: dict) -> dict:
             cmd,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=5,  # Reduced timeout to leave room for Ollama
             cwd=recall_dir or Path.cwd(),
         )
 
@@ -147,150 +129,249 @@ def call_recall(tool_name: str, args: dict) -> dict:
         return {"success": False, "error": str(e)}
 
 
-def format_recent_files(files: list[dict]) -> str:
-    """Format recent files as markdown list.
+def fetch_raw_memories(project_namespace: str) -> list[dict]:
+    """Fetch raw memories from both project and global namespaces.
 
     Args:
-        files: List of file activity dicts from get_recent_files()
+        project_namespace: The project namespace (e.g., 'project:recall')
 
     Returns:
-        Formatted markdown string
+        List of memory dicts with type, content, importance, confidence
     """
-    if not files:
+    all_memories = []
+
+    # Fetch project memories
+    project_result = call_recall("memory_list", {
+        "namespace": project_namespace,
+        "limit": 50,
+        "order_by": "importance",
+        "descending": True,
+    })
+    if project_result.get("success") and project_result.get("memories"):
+        for mem in project_result["memories"]:
+            mem["_source"] = "project"
+        all_memories.extend(project_result["memories"])
+
+    # Fetch global memories (preferences and golden rules)
+    global_result = call_recall("memory_list", {
+        "namespace": "global",
+        "limit": 30,
+        "order_by": "importance",
+        "descending": True,
+    })
+    if global_result.get("success") and global_result.get("memories"):
+        # Filter to high-importance globals
+        for mem in global_result["memories"]:
+            importance = mem.get("importance", 0.5)
+            mem_type = mem.get("type", "")
+            # Include preferences, golden rules, and high-importance items
+            if mem_type in ("preference", "golden_rule") or importance >= 0.7:
+                mem["_source"] = "global"
+                all_memories.append(mem)
+
+    return all_memories
+
+
+def curate_with_ollama(
+    memories: list[dict],
+    project_name: str,
+    model: str = "llama3.2",
+) -> Optional[str]:
+    """Use Ollama to intelligently curate and synthesize memories.
+
+    Args:
+        memories: List of raw memory dicts
+        project_name: Name of the current project
+        model: Ollama model to use (default: llama3.2)
+
+    Returns:
+        Curated markdown context, or None on failure
+    """
+    if not memories:
+        return None
+
+    # Format memories for Ollama
+    memory_lines = []
+    for mem in memories:
+        source = mem.get("_source", "unknown")
+        mem_type = mem.get("type", "unknown")
+        content = mem.get("content", "")
+        importance = mem.get("importance", 0.5)
+        confidence = mem.get("confidence", 0.3)
+
+        # Format: [source|type|imp:X.X|conf:X.X] content
+        memory_lines.append(
+            f"[{source}|{mem_type}|imp:{importance:.1f}|conf:{confidence:.1f}] {content}"
+        )
+
+    memory_text = "\n".join(memory_lines)
+
+    prompt = f"""You are curating memories for a Claude Code session.
+Project: {project_name}
+
+Raw memories (format: [source|type|importance|confidence] content):
+{memory_text}
+
+INSTRUCTIONS:
+1. Synthesize duplicate/similar memories into single statements
+2. Use RFC 2119 language (MUST, MUST NOT, SHOULD, SHOULD NOT)
+3. Prioritize by: golden_rule > high-confidence > project-specific > global
+4. Remove redundant or contradictory information (keep higher confidence)
+5. Output ONLY the curated markdown, no explanations
+
+OUTPUT FORMAT:
+# Memory Context
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in these memories are to be interpreted as described in RFC 2119.
+
+---
+
+## Golden Rules
+- [highest priority rules, if any]
+
+## Preferences
+- [user preferences]
+
+## Patterns
+- [coding patterns]
+
+## Recent Decisions
+- [decisions, if any]
+
+OUTPUT:"""
+
+    try:
+        result = subprocess.run(
+            ["ollama", "run", model],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=6,  # Leave headroom within 10s hook timeout
+        )
+
+        if result.returncode != 0:
+            return None
+
+        output = result.stdout.strip()
+
+        # Validate output looks like markdown
+        if not output or "Memory Context" not in output:
+            return None
+
+        return output
+
+    except subprocess.TimeoutExpired:
+        return None
+    except FileNotFoundError:
+        # Ollama not installed
+        return None
+    except Exception:
+        return None
+
+
+def fallback_context(memories: list[dict]) -> str:
+    """Generate simple context when Ollama is unavailable.
+
+    Args:
+        memories: List of memory dicts
+
+    Returns:
+        Basic markdown context
+    """
+    if not memories:
         return ""
 
-    lines = ["## Recent Files\n"]
+    # RFC 2119 preamble
+    lines = [
+        "# Memory Context",
+        "",
+        'The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", '
+        '"SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in these '
+        "memories are to be interpreted as described in RFC 2119.",
+        "",
+        "---",
+        "",
+    ]
 
-    for file_info in files:
-        file_path = file_info.get("file_path", "")
-        last_action = file_info.get("last_action", "accessed")
-        last_accessed = file_info.get("last_accessed", 0)
+    # Group by type
+    by_type: dict[str, list[str]] = {
+        "golden_rule": [],
+        "preference": [],
+        "pattern": [],
+        "decision": [],
+        "other": [],
+    }
 
-        # Convert timestamp to relative time
-        try:
-            accessed_time = datetime.fromtimestamp(last_accessed)
-            now = datetime.now()
-            delta = now - accessed_time
+    for mem in memories:
+        mem_type = mem.get("type", "other")
+        content = mem.get("content", "")
+        source = mem.get("_source", "")
+        namespace_tag = f" [{source}]" if source else ""
 
-            if delta.days == 0:
-                time_str = "today"
-            elif delta.days == 1:
-                time_str = "yesterday"
-            else:
-                time_str = f"{delta.days} days ago"
-        except (ValueError, OSError):
-            time_str = "recently"
+        if mem_type in by_type:
+            by_type[mem_type].append(f"- {content}{namespace_tag}")
+        else:
+            by_type["other"].append(f"- {content}{namespace_tag}")
 
-        lines.append(f"- {file_path} ({last_action} {time_str})")
+    # Output sections
+    if by_type["golden_rule"]:
+        lines.append("## Golden Rules")
+        lines.extend(by_type["golden_rule"])
+        lines.append("")
+
+    if by_type["preference"]:
+        lines.append("## Preferences")
+        lines.extend(by_type["preference"])
+        lines.append("")
+
+    if by_type["pattern"]:
+        lines.append("## Patterns")
+        lines.extend(by_type["pattern"])
+        lines.append("")
+
+    if by_type["decision"]:
+        lines.append("## Recent Decisions")
+        lines.extend(by_type["decision"])
+        lines.append("")
 
     return "\n".join(lines)
-
-
-def call_get_recent_files(project_root: str | None) -> list[dict]:
-    """Call the recall internal API to get recent files.
-
-    Args:
-        project_root: Project root path or None
-
-    Returns:
-        List of file activity dicts
-    """
-    try:
-        # Import recall modules directly for internal API access
-        recall_paths = [
-            Path(__file__).parent.parent,
-            Path.home() / ".local" / "share" / "recall",
-            Path("/opt/recall"),
-        ]
-
-        recall_dir = None
-        for path in recall_paths:
-            if (path / "src" / "recall").exists():
-                recall_dir = path
-                break
-
-        if recall_dir is None:
-            return []
-
-        # Add src to sys.path temporarily
-        src_path = str(recall_dir / "src")
-        if src_path not in sys.path:
-            sys.path.insert(0, src_path)
-
-        # Import and use HybridStore
-        from recall.config import settings
-        from recall.storage.hybrid import HybridStore
-
-        # Create store and get recent files
-        import asyncio
-
-        async def _get_files():
-            async with HybridStore.create(
-                sqlite_path=settings.sqlite_path,
-                chroma_path=settings.chroma_path,
-                collection_name=settings.collection_name,
-                ollama_host=settings.ollama_host,
-                ollama_model=settings.ollama_model,
-            ) as store:
-                return store.get_recent_files(
-                    project_root=project_root,
-                    limit=10,
-                    days=14,
-                )
-
-        return asyncio.run(_get_files())
-
-    except Exception as e:
-        # Silently fail - this is optional context
-        print(f"<!-- Error getting recent files: {e} -->", file=sys.stderr)
-        return []
 
 
 def main():
     """Main hook entry point.
 
-    Loads relevant memory context and outputs it as markdown.
+    Two-phase approach:
+    1. Fetch raw memories from recall
+    2. Curate with Ollama (or fallback to simple formatting)
+
     All errors are caught to prevent blocking Claude Code.
     """
     try:
-        # Determine project namespace and root
-        namespace = get_project_namespace()
-        project_root = get_project_root()
+        # Determine project namespace
+        namespace, project_name = get_project_namespace()
 
-        # Call memory_context tool
-        result = call_recall("memory_context", {
-            "project": namespace.replace("project:", "") if namespace.startswith("project:") else None,
-            "token_budget": 4000,
-        })
+        # Phase 1: Fetch raw memories
+        memories = fetch_raw_memories(namespace)
 
-        # Collect output sections
-        output_sections = []
+        if not memories:
+            # No memories to show
+            return
 
-        # Add memory context if available
-        if result.get("success") and result.get("context"):
-            context = result["context"]
-            # Only output if there's actual content
-            if context and context.strip() and context != "# Memory Context\n\n_No memories found._":
-                output_sections.append(context)
+        # Phase 2: Curate with Ollama
+        context = curate_with_ollama(memories, project_name)
 
-        # Add recent files if in a project
-        if project_root:
-            recent_files = call_get_recent_files(project_root)
-            if recent_files:
-                files_section = format_recent_files(recent_files)
-                if files_section:
-                    output_sections.append(files_section)
+        # Fallback if Ollama fails
+        if not context:
+            context = fallback_context(memories)
 
-        # Output all sections
-        if output_sections:
-            print("\n\n".join(output_sections))
-            print()  # blank line
+        if context and context.strip():
+            print(context)
+            print()
             print("---")
             print("**Memory tip:** When you notice user preferences, technical decisions, or patterns worth remembering, use `memory_store_tool` to save them.")
 
     except Exception as e:
         # Silently fail - don't block Claude Code
-        # Optionally log to stderr for debugging
         print(f"<!-- recall-context hook error: {e} -->", file=sys.stderr)
 
 
