@@ -160,12 +160,12 @@ def fetch_raw_memories(project_namespace: str) -> list[dict]:
         "descending": True,
     })
     if global_result.get("success") and global_result.get("memories"):
-        # Filter to high-importance globals
+        # Only include universal global memories (preferences and golden rules)
+        # Skip patterns/decisions - they're usually context-specific incidents
         for mem in global_result["memories"]:
-            importance = mem.get("importance", 0.5)
             mem_type = mem.get("type", "")
-            # Include preferences, golden rules, and high-importance items
-            if mem_type in ("preference", "golden_rule") or importance >= 0.7:
+            # Only preferences and golden rules apply across all projects
+            if mem_type in ("preference", "golden_rule"):
                 mem["_source"] = "global"
                 all_memories.append(mem)
 
