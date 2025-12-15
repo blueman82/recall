@@ -24,6 +24,10 @@
 
 conductor:
   default_agent: python-pro
+  worktree:
+    path: /Users/harrison/Github/recall-graph-inspection
+    branch: feat/graph-inspection
+    main_repo: /Users/harrison/Github/recall
   worktree_groups:
     - group_id: "data-model"
       description: "Data structures for graph inspection"
@@ -66,7 +70,7 @@ plan:
       name: "Add graph inspection data structures"
       agent: "python-schema-architect"
       files:
-        - "src/recall/memory/types.py"
+        - "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/types.py"
       depends_on: []
       estimated_time: "20m"
 
@@ -83,14 +87,14 @@ plan:
         - "No unused variables."
 
       test_commands:
-        - "uv run python -c \"from recall.memory.types import GraphNode, GraphEdge, GraphPath, GraphStats, GraphInspectionResult; print('Import OK')\""
-        - "uv run pytest tests/unit/test_memory_types.py -v -k 'GraphNode or GraphEdge or GraphPath or GraphStats or GraphInspection'"
+        - "cd /Users/harrison/Github/recall-graph-inspection && uv run python -c \"from recall.memory.types import GraphNode, GraphEdge, GraphPath, GraphStats, GraphInspectionResult; print('Import OK')\""
+        - "cd /Users/harrison/Github/recall-graph-inspection && uv run pytest tests/unit/test_memory_types.py -v -k 'GraphNode or GraphEdge or GraphPath or GraphStats or GraphInspection'"
 
       description: |
         ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
         ```bash
         # Verify types.py exists and has ExpandedMemory (from graph-expansion prerequisite)
-        uv run python -c "from recall.memory.types import ExpandedMemory, GraphExpansionConfig"
+        cd /Users/harrison/Github/recall-graph-inspection && uv run python -c "from recall.memory.types import ExpandedMemory, GraphExpansionConfig"
         ```
 
         ## TASK DESCRIPTION
@@ -113,38 +117,38 @@ plan:
         key_points:
           - point: "GraphNode with content_preview truncation"
             details: "Max 100 chars from memory.content, ellipsis if truncated"
-            reference: "src/recall/memory/types.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/types.py"
           - point: "GraphEdge with id, source, target, type, weight"
             details: "Mirrors storage edge dict structure for consistency"
-            reference: "src/recall/memory/types.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/types.py"
           - point: "GraphPath with node_ids, edge_types, total_weight, relevance_score"
             details: "Records traversal path from origin with computed scores"
-            reference: "src/recall/memory/types.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/types.py"
           - point: "GraphStats with counts and max_depth_reached"
             details: "Summary for understanding graph extent"
-            reference: "src/recall/memory/types.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/types.py"
           - point: "GraphInspectionResult.to_mermaid() method"
             details: "Generates flowchart TD syntax: nodes as rounded rects, edges with labels"
-            reference: "src/recall/memory/types.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/types.py"
         integration: {}
 
       verification:
         automated_tests:
-          command: "uv run pytest tests/unit/test_memory_types.py -v -k Graph"
+          command: "cd /Users/harrison/Github/recall-graph-inspection && uv run pytest tests/unit/test_memory_types.py -v -k Graph"
           expected_output: "Tests pass"
 
       code_quality:
         python:
           full_quality_pipeline:
             command: |
-              uv run python -m py_compile src/recall/memory/types.py && uv run pytest tests/unit/test_memory_types.py -v -k Graph
+              cd /Users/harrison/Github/recall-graph-inspection && uv run python -m py_compile src/recall/memory/types.py && uv run pytest tests/unit/test_memory_types.py -v -k Graph
             exit_on_failure: true
 
       commit:
         type: "feat"
         message: "add GraphNode, GraphEdge, GraphPath, GraphStats, GraphInspectionResult dataclasses for graph inspection"
         files:
-          - "src/recall/memory/types.py"
+          - "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/types.py"
 
     # ═══════════════════════════════════════════════════════════════
     # TASK 2: Core Implementation
@@ -153,7 +157,7 @@ plan:
       name: "Implement inspect_graph function"
       agent: "python-pro"
       files:
-        - "src/recall/memory/operations.py"
+        - "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/operations.py"
       depends_on: [1]
       estimated_time: "40m"
 
@@ -174,17 +178,17 @@ plan:
         - "All imports from dependency tasks resolve."
 
       test_commands:
-        - "uv run python -c \"from recall.memory.operations import inspect_graph; print('Import OK')\""
-        - "uv run python -m py_compile src/recall/memory/operations.py"
+        - "cd /Users/harrison/Github/recall-graph-inspection && uv run python -c \"from recall.memory.operations import inspect_graph; print('Import OK')\""
+        - "cd /Users/harrison/Github/recall-graph-inspection && uv run python -m py_compile src/recall/memory/operations.py"
 
       description: |
         ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
         ```bash
         # Verify Task 1 completed - types exist
-        uv run python -c "from recall.memory.types import GraphInspectionResult, GraphNode, GraphEdge, GraphPath, GraphStats"
+        cd /Users/harrison/Github/recall-graph-inspection && uv run python -c "from recall.memory.types import GraphInspectionResult, GraphNode, GraphEdge, GraphPath, GraphStats"
 
         # Verify graph-expansion prerequisite - scoring infrastructure exists
-        uv run python -c "from recall.memory.types import GraphExpansionConfig"
+        cd /Users/harrison/Github/recall-graph-inspection && uv run python -c "from recall.memory.types import GraphExpansionConfig"
         ```
 
         ## TASK DESCRIPTION
@@ -214,25 +218,25 @@ plan:
         key_points:
           - point: "inspect_graph() with direction parameter"
             details: "Pass direction to store.get_edges() for outgoing/incoming/both traversal"
-            reference: "src/recall/memory/operations.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/operations.py"
           - point: "BFS traversal with deque"
             details: "Uses deque for O(1) popleft, processes in breadth-first order"
-            reference: "src/recall/memory/operations.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/operations.py"
           - point: "GraphNode construction from memory"
             details: "Truncate content to 100 chars for content_preview"
-            reference: "src/recall/memory/operations.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/operations.py"
           - point: "GraphEdge deduplication by id"
             details: "Track seen edge ids to avoid duplicates in result"
-            reference: "src/recall/memory/operations.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/operations.py"
           - point: "GraphPath with relevance scoring"
             details: "Use GraphExpansionConfig formula: decay^hop * weight_product * geometric_mean(types)"
-            reference: "src/recall/memory/operations.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/operations.py"
           - point: "output size caps"
             details: "max_nodes=100, max_edges=200, max_paths=50 to prevent oversized responses"
-            reference: "src/recall/memory/operations.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/operations.py"
           - point: "read-only operation"
             details: "Only reads from store, no writes or modifications"
-            reference: "src/recall/memory/operations.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/operations.py"
         integration:
           imports:
             - "recall.memory.types.GraphInspectionResult"
@@ -244,21 +248,21 @@ plan:
 
       verification:
         automated_tests:
-          command: "uv run python -m py_compile src/recall/memory/operations.py"
+          command: "cd /Users/harrison/Github/recall-graph-inspection && uv run python -m py_compile src/recall/memory/operations.py"
           expected_output: "No output (success)"
 
       code_quality:
         python:
           full_quality_pipeline:
             command: |
-              uv run python -m py_compile src/recall/memory/operations.py
+              cd /Users/harrison/Github/recall-graph-inspection && uv run python -m py_compile src/recall/memory/operations.py
             exit_on_failure: true
 
       commit:
         type: "feat"
         message: "add inspect_graph function for read-only graph inspection with BFS traversal"
         files:
-          - "src/recall/memory/operations.py"
+          - "/Users/harrison/Github/recall-graph-inspection/src/recall/memory/operations.py"
 
     # ═══════════════════════════════════════════════════════════════
     # TASK 3: MCP Tool Handler
@@ -267,7 +271,7 @@ plan:
       name: "Add memory_inspect_graph_tool MCP handler"
       agent: "python-pro"
       files:
-        - "src/recall/__main__.py"
+        - "/Users/harrison/Github/recall-graph-inspection/src/recall/__main__.py"
       depends_on: [2]
       estimated_time: "25m"
 
@@ -287,17 +291,17 @@ plan:
         - "All imports from dependency tasks resolve."
 
       test_commands:
-        - "uv run python -c \"from recall.__main__ import memory_inspect_graph_tool; import inspect; sig = inspect.signature(memory_inspect_graph_tool); assert 'memory_id' in sig.parameters; print('Signature OK')\""
-        - "uv run pytest tests/integration/test_mcp_server.py -v -k 'inspect_graph'"
+        - "cd /Users/harrison/Github/recall-graph-inspection && uv run python -c \"from recall.__main__ import memory_inspect_graph_tool; import inspect; sig = inspect.signature(memory_inspect_graph_tool); assert 'memory_id' in sig.parameters; print('Signature OK')\""
+        - "cd /Users/harrison/Github/recall-graph-inspection && uv run pytest tests/integration/test_mcp_server.py -v -k 'inspect_graph'"
 
       description: |
         ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
         ```bash
         # Verify Task 2 completed - inspect_graph exists
-        uv run python -c "from recall.memory.operations import inspect_graph"
+        cd /Users/harrison/Github/recall-graph-inspection && uv run python -c "from recall.memory.operations import inspect_graph"
 
         # Verify existing MCP tool pattern
-        grep -n "@mcp.tool" src/recall/__main__.py | head -5
+        grep -n "@mcp.tool" /Users/harrison/Github/recall-graph-inspection/src/recall/__main__.py | head -5
         ```
 
         ## TASK DESCRIPTION
@@ -319,43 +323,43 @@ plan:
         key_points:
           - point: "memory_inspect_graph_tool() with @mcp.tool() decorator"
             details: "Register as MCP tool with FastMCP"
-            reference: "src/recall/__main__.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/__main__.py"
           - point: "direction validation"
             details: "Raise ValueError if not in ('outgoing', 'incoming', 'both')"
-            reference: "src/recall/__main__.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/__main__.py"
           - point: "output_format validation"
             details: "Raise ValueError if not in ('json', 'mermaid')"
-            reference: "src/recall/__main__.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/__main__.py"
           - point: "JSON response format"
             details: "nodes: list[dict], edges: list[dict], paths: list[dict], stats: dict"
-            reference: "src/recall/__main__.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/__main__.py"
           - point: "mermaid output via to_mermaid()"
             details: "Return result.to_mermaid() string when output_format='mermaid'"
-            reference: "src/recall/__main__.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/__main__.py"
           - point: "error handling for missing memory"
             details: "Return {'success': False, 'error': 'Memory not found: {id}'}"
-            reference: "src/recall/__main__.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/src/recall/__main__.py"
         integration:
           imports:
             - "recall.memory.operations.inspect_graph"
 
       verification:
         automated_tests:
-          command: "uv run pytest tests/integration/test_mcp_server.py -v -k inspect_graph"
+          command: "cd /Users/harrison/Github/recall-graph-inspection && uv run pytest tests/integration/test_mcp_server.py -v -k inspect_graph"
           expected_output: "Tests pass"
 
       code_quality:
         python:
           full_quality_pipeline:
             command: |
-              uv run python -m py_compile src/recall/__main__.py && uv run pytest tests/integration/test_mcp_server.py -v -k inspect_graph
+              cd /Users/harrison/Github/recall-graph-inspection && uv run python -m py_compile src/recall/__main__.py && uv run pytest tests/integration/test_mcp_server.py -v -k inspect_graph
             exit_on_failure: true
 
       commit:
         type: "feat"
         message: "add memory_inspect_graph_tool MCP handler for graph visualization"
         files:
-          - "src/recall/__main__.py"
+          - "/Users/harrison/Github/recall-graph-inspection/src/recall/__main__.py"
 
     # ═══════════════════════════════════════════════════════════════
     # TASK 4: Comprehensive Tests
@@ -364,9 +368,9 @@ plan:
       name: "Add comprehensive graph inspection tests"
       agent: "test-automator"
       files:
-        - "tests/unit/test_memory_types.py"
-        - "tests/unit/test_memory_operations.py"
-        - "tests/integration/test_mcp_server.py"
+        - "/Users/harrison/Github/recall-graph-inspection/tests/unit/test_memory_types.py"
+        - "/Users/harrison/Github/recall-graph-inspection/tests/unit/test_memory_operations.py"
+        - "/Users/harrison/Github/recall-graph-inspection/tests/integration/test_mcp_server.py"
       depends_on: [1, 2, 3]
       estimated_time: "35m"
 
@@ -392,20 +396,20 @@ plan:
         - "No placeholder assertions."
 
       test_commands:
-        - "uv run pytest tests/unit/test_memory_types.py -v -k Graph"
-        - "uv run pytest tests/unit/test_memory_operations.py -v -k 'InspectGraph'"
-        - "uv run pytest tests/integration/test_mcp_server.py -v -k 'inspect_graph'"
+        - "cd /Users/harrison/Github/recall-graph-inspection && uv run pytest tests/unit/test_memory_types.py -v -k Graph"
+        - "cd /Users/harrison/Github/recall-graph-inspection && uv run pytest tests/unit/test_memory_operations.py -v -k 'InspectGraph'"
+        - "cd /Users/harrison/Github/recall-graph-inspection && uv run pytest tests/integration/test_mcp_server.py -v -k 'inspect_graph'"
 
       description: |
         ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
         ```bash
         # Verify all previous tasks completed
-        uv run python -c "from recall.memory.types import GraphInspectionResult, GraphNode, GraphEdge"
-        uv run python -c "from recall.memory.operations import inspect_graph"
-        uv run python -c "from recall.__main__ import memory_inspect_graph_tool"
+        cd /Users/harrison/Github/recall-graph-inspection && uv run python -c "from recall.memory.types import GraphInspectionResult, GraphNode, GraphEdge"
+        cd /Users/harrison/Github/recall-graph-inspection && uv run python -c "from recall.memory.operations import inspect_graph"
+        cd /Users/harrison/Github/recall-graph-inspection && uv run python -c "from recall.__main__ import memory_inspect_graph_tool"
 
         # Verify test file locations
-        ls tests/unit/test_memory_types.py tests/unit/test_memory_operations.py tests/integration/test_mcp_server.py
+        ls /Users/harrison/Github/recall-graph-inspection/tests/unit/test_memory_types.py /Users/harrison/Github/recall-graph-inspection/tests/unit/test_memory_operations.py /Users/harrison/Github/recall-graph-inspection/tests/integration/test_mcp_server.py
         ```
 
         ## TASK DESCRIPTION
@@ -437,49 +441,49 @@ plan:
         key_points:
           - point: "TestGraphNode content_preview truncation"
             details: "Test 150-char content gets truncated to 100 with ellipsis"
-            reference: "tests/unit/test_memory_types.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/tests/unit/test_memory_types.py"
           - point: "TestGraphInspectionResult.to_mermaid()"
             details: "Verify output contains 'flowchart TD', node definitions, edge arrows"
-            reference: "tests/unit/test_memory_types.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/tests/unit/test_memory_types.py"
           - point: "TestInspectGraph direction modes"
             details: "Test outgoing-only, incoming-only, both - each with known graph"
-            reference: "tests/unit/test_memory_operations.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/tests/unit/test_memory_operations.py"
           - point: "TestInspectGraph max_depth"
             details: "Graph A->B->C->D, max_depth=2 should not reach D"
-            reference: "tests/unit/test_memory_operations.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/tests/unit/test_memory_operations.py"
           - point: "TestInspectGraph edge_types filtering"
             details: "Only follow specified edge types"
-            reference: "tests/unit/test_memory_operations.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/tests/unit/test_memory_operations.py"
           - point: "TestInspectGraph output size caps"
             details: "Create large graph, verify caps enforced"
-            reference: "tests/unit/test_memory_operations.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/tests/unit/test_memory_operations.py"
           - point: "TestMemoryInspectGraphTool JSON format"
             details: "Verify response has nodes, edges, paths, stats keys"
-            reference: "tests/integration/test_mcp_server.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/tests/integration/test_mcp_server.py"
           - point: "TestMemoryInspectGraphTool mermaid format"
             details: "Verify response is string starting with 'flowchart'"
-            reference: "tests/integration/test_mcp_server.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/tests/integration/test_mcp_server.py"
           - point: "TestMemoryInspectGraphTool error handling"
             details: "Non-existent memory_id returns success=False with error"
-            reference: "tests/integration/test_mcp_server.py"
+            reference: "/Users/harrison/Github/recall-graph-inspection/tests/integration/test_mcp_server.py"
         integration: {}
 
       verification:
         automated_tests:
-          command: "uv run pytest tests/unit/test_memory_types.py tests/unit/test_memory_operations.py tests/integration/test_mcp_server.py -v -k 'Graph or inspect'"
+          command: "cd /Users/harrison/Github/recall-graph-inspection && uv run pytest tests/unit/test_memory_types.py tests/unit/test_memory_operations.py tests/integration/test_mcp_server.py -v -k 'Graph or inspect'"
           expected_output: "Tests pass"
 
       code_quality:
         python:
           full_quality_pipeline:
             command: |
-              uv run pytest tests/unit/test_memory_types.py tests/unit/test_memory_operations.py tests/integration/test_mcp_server.py -v -k 'Graph or inspect' --tb=short
+              cd /Users/harrison/Github/recall-graph-inspection && uv run pytest tests/unit/test_memory_types.py tests/unit/test_memory_operations.py tests/integration/test_mcp_server.py -v -k 'Graph or inspect' --tb=short
             exit_on_failure: true
 
       commit:
         type: "test"
         message: "add comprehensive tests for graph inspection tool"
         files:
-          - "tests/unit/test_memory_types.py"
-          - "tests/unit/test_memory_operations.py"
-          - "tests/integration/test_mcp_server.py"
+          - "/Users/harrison/Github/recall-graph-inspection/tests/unit/test_memory_types.py"
+          - "/Users/harrison/Github/recall-graph-inspection/tests/unit/test_memory_operations.py"
+          - "/Users/harrison/Github/recall-graph-inspection/tests/integration/test_mcp_server.py"
