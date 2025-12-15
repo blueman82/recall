@@ -77,7 +77,7 @@ Add Recall to your meta-mcp `servers.json`:
 }
 ```
 
-Or for Claude Desktop / other MCP clients (`claude_desktop_config.json`):
+Or for Claude Code / other MCP clients (`claude.json`):
 
 ```json
 {
