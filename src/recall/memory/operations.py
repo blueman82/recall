@@ -15,7 +15,12 @@ from typing import Any, Optional
 from recall.memory.types import (
     ApplyResult,
     ExpandedMemory,
+    GraphEdge,
     GraphExpansionConfig,
+    GraphInspectionResult,
+    GraphNode,
+    GraphPath,
+    GraphStats,
     Memory,
     MemoryType,
     OutcomeResult,
@@ -333,6 +338,274 @@ async def _expand_related_memories(
     expanded.sort(key=lambda x: x.relevance_score, reverse=True)
 
     return expanded
+
+
+async def inspect_graph(
+    store: HybridStore,
+    memory_id: str,
+    max_depth: int = 2,
+    direction: str = "both",
+    edge_types: Optional[list[str]] = None,
+    include_scores: bool = True,
+    decay_factor: float = 0.7,
+) -> GraphInspectionResult:
+    """Inspect the graph structure around a memory node using BFS traversal.
+
+    Performs read-only breadth-first search from the origin memory, collecting
+    all nodes and edges within max_depth hops. Returns structured data for
+    visualization including Mermaid diagram generation.
+
+    This function is READ-ONLY - it does not modify any data in the store.
+
+    Args:
+        store: HybridStore instance for storage operations
+        memory_id: ID of the memory to start inspection from
+        max_depth: Maximum number of hops to traverse (default: 2)
+        direction: Edge traversal direction - "outgoing", "incoming", or "both" (default: "both")
+        edge_types: Optional list of edge types to include (None means all)
+        include_scores: If True, compute relevance scores for paths (default: True)
+        decay_factor: Factor by which relevance decays per hop (default: 0.7)
+
+    Returns:
+        GraphInspectionResult with nodes, edges, paths, stats, and to_mermaid() support
+
+    Example:
+        >>> store = await HybridStore.create(ephemeral=True)
+        >>> result = await inspect_graph(store, "mem_123", max_depth=2)
+        >>> if result.success:
+        ...     print(f"Found {result.stats.node_count} nodes")
+        ...     print(result.to_mermaid())  # Mermaid diagram
+    """
+    # Output size caps to prevent oversized responses
+    MAX_NODES = 100
+    MAX_EDGES = 200
+    MAX_PATHS = 50
+
+    # Validate direction parameter
+    if direction not in ("outgoing", "incoming", "both"):
+        return GraphInspectionResult(
+            success=False,
+            error=f"Invalid direction '{direction}'. Must be 'outgoing', 'incoming', or 'both'.",
+        )
+
+    # Verify origin memory exists
+    origin_data = await store.get_memory(memory_id)
+    if origin_data is None:
+        return GraphInspectionResult(
+            success=False,
+            error=f"Origin memory '{memory_id}' not found",
+        )
+
+    # Convert edge type filters to set for O(1) lookup
+    edge_types_set: Optional[set[str]] = None
+    if edge_types is not None:
+        edge_types_set = set(edge_types)
+
+    # Build GraphExpansionConfig for scoring
+    config = GraphExpansionConfig(
+        max_depth=max_depth,
+        decay_factor=decay_factor,
+        include_edge_types=edge_types_set,
+        exclude_edge_types=None,
+    )
+
+    # Initialize result collections
+    nodes: list[GraphNode] = []
+    edges: list[GraphEdge] = []
+    paths: list[GraphPath] = []
+
+    # Track visited nodes and edges to avoid duplicates
+    seen_node_ids: set[str] = set()
+    seen_edge_keys: set[tuple[str, str, str]] = set()  # (source_id, target_id, edge_type)
+
+    # Edge ID counter
+    edge_id_counter = 0
+
+    # Track maximum depth actually reached
+    max_depth_reached = 0
+
+    # BFS queue: (memory_id, depth, path_node_ids, path_edge_types, path_weight)
+    queue: deque[tuple[str, int, list[str], list[str], float]] = deque()
+
+    # Add origin node
+    origin_memory = _dict_to_memory(origin_data)
+    origin_node = GraphNode.from_memory(origin_memory)
+    nodes.append(origin_node)
+    seen_node_ids.add(memory_id)
+
+    # Initialize queue with origin
+    queue.append((memory_id, 0, [memory_id], [], 1.0))
+
+    try:
+        while queue and len(nodes) < MAX_NODES:
+            current_id, depth, path_node_ids, path_edge_types, path_weight = queue.popleft()
+
+            # Track maximum depth reached
+            if depth > max_depth_reached:
+                max_depth_reached = depth
+
+            # Stop expanding if we've exceeded max depth
+            if depth >= max_depth:
+                # Record path for leaf nodes (if we have paths to record)
+                if len(path_node_ids) > 1 and len(paths) < MAX_PATHS and include_scores:
+                    # Compute relevance score
+                    relevance_score = _compute_path_relevance(
+                        path_edge_types, path_weight, config
+                    )
+                    paths.append(GraphPath(
+                        node_ids=path_node_ids.copy(),
+                        edge_types=path_edge_types.copy(),
+                        total_weight=path_weight,
+                        relevance_score=relevance_score,
+                    ))
+                continue
+
+            # Get edges from current node based on direction
+            edge_list = store.get_edges(current_id, direction=direction)
+
+            # Track if this node has any valid outgoing edges
+            has_children = False
+
+            for edge in edge_list:
+                if len(edges) >= MAX_EDGES:
+                    break
+
+                edge_type = edge.get("edge_type", "relates_to")
+
+                # Apply edge type filtering (only include types in the list if specified)
+                if edge_types_set is not None and edge_type not in edge_types_set:
+                    continue
+
+                # Determine the related memory ID based on direction
+                source_id = edge["source_id"]
+                target_id = edge["target_id"]
+
+                # For "outgoing", we follow edges where current is source
+                # For "incoming", we follow edges where current is target
+                # For "both", we follow in both directions
+                if direction == "outgoing" and source_id != current_id:
+                    continue
+                if direction == "incoming" and target_id != current_id:
+                    continue
+
+                related_id = target_id if source_id == current_id else source_id
+
+                # Create edge key for deduplication
+                edge_key = (source_id, target_id, edge_type)
+                if edge_key not in seen_edge_keys:
+                    seen_edge_keys.add(edge_key)
+
+                    # Create GraphEdge
+                    edge_weight = edge.get("weight", 1.0)
+                    graph_edge = GraphEdge(
+                        id=edge_id_counter,
+                        source_id=source_id,
+                        target_id=target_id,
+                        edge_type=edge_type,
+                        weight=edge_weight,
+                    )
+                    edges.append(graph_edge)
+                    edge_id_counter += 1
+
+                # Add related node if not seen
+                if related_id not in seen_node_ids and len(nodes) < MAX_NODES:
+                    seen_node_ids.add(related_id)
+                    has_children = True
+
+                    # Fetch related memory
+                    related_data = await store.get_memory(related_id)
+                    if related_data is not None:
+                        related_memory = _dict_to_memory(related_data)
+                        related_node = GraphNode.from_memory(related_memory)
+                        nodes.append(related_node)
+
+                        # Calculate new path metrics
+                        edge_weight = edge.get("weight", 1.0)
+                        new_path_weight = path_weight * edge_weight
+                        new_path_node_ids = path_node_ids + [related_id]
+                        new_path_edge_types = path_edge_types + [edge_type]
+
+                        # Add to queue for further expansion
+                        queue.append((
+                            related_id,
+                            depth + 1,
+                            new_path_node_ids,
+                            new_path_edge_types,
+                            new_path_weight,
+                        ))
+
+            # Record path for leaf nodes (nodes with no unvisited children)
+            if not has_children and len(path_node_ids) > 1 and len(paths) < MAX_PATHS and include_scores:
+                relevance_score = _compute_path_relevance(
+                    path_edge_types, path_weight, config
+                )
+                paths.append(GraphPath(
+                    node_ids=path_node_ids.copy(),
+                    edge_types=path_edge_types.copy(),
+                    total_weight=path_weight,
+                    relevance_score=relevance_score,
+                ))
+
+    except Exception as e:
+        return GraphInspectionResult(
+            success=False,
+            error=f"Error during graph traversal: {e}",
+        )
+
+    # Build stats
+    stats = GraphStats(
+        node_count=len(nodes),
+        edge_count=len(edges),
+        max_depth_reached=max_depth_reached,
+        origin_id=memory_id,
+    )
+
+    # Sort paths by relevance score descending
+    paths.sort(key=lambda p: p.relevance_score, reverse=True)
+
+    return GraphInspectionResult(
+        success=True,
+        origin_id=memory_id,
+        nodes=nodes,
+        edges=edges,
+        paths=paths[:MAX_PATHS],  # Ensure we don't exceed limit
+        stats=stats,
+    )
+
+
+def _compute_path_relevance(
+    edge_types: list[str],
+    path_weight: float,
+    config: GraphExpansionConfig,
+) -> float:
+    """Compute relevance score for a path using GraphExpansionConfig formula.
+
+    Formula: decay^hop * weight_product * geometric_mean(type_weights)
+
+    Args:
+        edge_types: List of edge types in the path
+        path_weight: Product of edge weights along the path
+        config: GraphExpansionConfig with decay_factor and edge_type_weights
+
+    Returns:
+        Relevance score between 0.0 and 1.0
+    """
+    if not edge_types:
+        return 1.0
+
+    hop_distance = len(edge_types)
+
+    # decay_factor^hop_distance
+    decay_component = config.decay_factor ** hop_distance
+
+    # Geometric mean of type weights for edges in path
+    type_weights_product = 1.0
+    for e_type in edge_types:
+        type_weights_product *= config.edge_type_weights.get(e_type, 0.7)
+    geometric_mean = type_weights_product ** (1.0 / len(edge_types))
+
+    # Final relevance score
+    return decay_component * path_weight * geometric_mean
 
 
 async def memory_recall(

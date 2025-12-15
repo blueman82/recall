@@ -251,6 +251,179 @@ class GraphExpansionConfig:
 
 
 @dataclass
+class GraphNode:
+    """Summarized memory info for graph visualization.
+
+    Provides a lightweight representation of a memory node for display
+    in graph inspection results, with truncated content for efficiency.
+
+    Attributes:
+        id: Memory ID
+        content_preview: Truncated content (max 100 chars, ellipsis if truncated)
+        memory_type: Memory type as string
+        confidence: Confidence score
+        importance: Importance score (0.0 to 1.0)
+    """
+    id: str
+    content_preview: str
+    memory_type: str
+    confidence: float
+    importance: float
+
+    @classmethod
+    def from_memory(cls, memory: Memory, hop_distance: int = 0) -> "GraphNode":
+        """Create a GraphNode from a Memory object.
+
+        Args:
+            memory: The source Memory object
+            hop_distance: Number of hops from origin (unused, kept for compatibility)
+
+        Returns:
+            GraphNode with truncated content preview
+        """
+        content = memory.content
+        if len(content) > 100:
+            content_preview = content[:97] + "..."
+        else:
+            content_preview = content
+        return cls(
+            id=memory.id,
+            content_preview=content_preview,
+            memory_type=memory.type.value,
+            confidence=memory.confidence,
+            importance=memory.importance,
+        )
+
+
+@dataclass
+class GraphEdge:
+    """Relationship info for graph visualization.
+
+    Represents an edge in the memory graph for inspection results.
+
+    Attributes:
+        id: Edge identifier (integer)
+        source_id: Source memory ID
+        target_id: Target memory ID
+        edge_type: Relationship type as string
+        weight: Edge weight (0.0 to 1.0)
+    """
+    id: int
+    source_id: str
+    target_id: str
+    edge_type: str
+    weight: float
+
+    @classmethod
+    def from_edge(cls, edge: Edge, edge_id: int = 0) -> "GraphEdge":
+        """Create a GraphEdge from an Edge object.
+
+        Args:
+            edge: The source Edge object
+            edge_id: Integer identifier for this edge
+
+        Returns:
+            GraphEdge for visualization
+        """
+        return cls(
+            id=edge_id,
+            source_id=edge.source_id,
+            target_id=edge.target_id,
+            edge_type=edge.relation.value,
+            weight=edge.weight,
+        )
+
+
+@dataclass
+class GraphPath:
+    """Path from origin with scoring.
+
+    Records the traversal path taken to reach a node from the origin,
+    including computed relevance scores.
+
+    Attributes:
+        node_ids: List of memory IDs in traversal order (origin first)
+        edge_types: List of edge types traversed
+        total_weight: Product of all edge weights along path
+        relevance_score: Combined relevance score for this path
+    """
+    node_ids: list[str]
+    edge_types: list[str]
+    total_weight: float
+    relevance_score: float
+
+
+@dataclass
+class GraphStats:
+    """Summary statistics for graph inspection.
+
+    Provides aggregate information about the inspected graph region.
+
+    Attributes:
+        node_count: Total number of nodes discovered
+        edge_count: Total number of edges discovered
+        max_depth_reached: Maximum hop distance actually traversed
+        origin_id: ID of the origin memory node
+    """
+    node_count: int
+    edge_count: int
+    max_depth_reached: int
+    origin_id: str
+
+
+@dataclass
+class GraphInspectionResult:
+    """Combined result for graph inspection tool.
+
+    Contains all information needed to visualize and understand
+    the graph structure around a memory.
+
+    Attributes:
+        success: Whether the inspection succeeded
+        origin_id: ID of the origin memory node
+        nodes: List of GraphNode objects discovered
+        edges: List of GraphEdge objects discovered
+        paths: List of GraphPath objects showing traversal paths
+        stats: GraphStats summary
+        error: Error message (if failed)
+    """
+    success: bool
+    origin_id: str = ""
+    nodes: list[GraphNode] = field(default_factory=list)
+    edges: list[GraphEdge] = field(default_factory=list)
+    paths: list[GraphPath] = field(default_factory=list)
+    stats: Optional[GraphStats] = None
+    error: Optional[str] = None
+
+    def to_mermaid(self) -> str:
+        """Generate Mermaid flowchart syntax for the graph.
+
+        Returns:
+            Mermaid flowchart TD syntax string with nodes as rounded
+            rectangles and edges labeled with relationship types.
+        """
+        if not self.nodes:
+            return "flowchart TD\n    empty[No nodes found]"
+
+        lines = ["flowchart TD"]
+
+        # Add nodes as rounded rectangles with content preview
+        for node in self.nodes:
+            # Escape special characters in content preview
+            label = node.content_preview.replace('"', "'").replace("\n", " ")
+            # Truncate label further for mermaid display
+            if len(label) > 50:
+                label = label[:47] + "..."
+            lines.append(f'    {node.id}["{label}"]')
+
+        # Add edges with relationship type labels
+        for edge in self.edges:
+            lines.append(f"    {edge.source_id} -->|{edge.edge_type}| {edge.target_id}")
+
+        return "\n".join(lines)
+
+
+@dataclass
 class RecallResult:
     """Result of a memory recall/query operation.
 
