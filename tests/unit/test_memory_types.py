@@ -13,6 +13,7 @@ from recall.memory import (
     StoreResult,
     validate_namespace,
 )
+from recall.memory.types import ExpandedMemory, GraphExpansionConfig
 
 
 class TestMemoryType:
@@ -316,3 +317,220 @@ class TestRecallResult:
         assert len(result.memories) == 1
         assert result.total == 100
         assert result.score == 0.8
+
+
+class TestExpandedMemory:
+    """Tests for ExpandedMemory dataclass."""
+
+    @pytest.fixture
+    def sample_memory(self):
+        """Create a sample Memory for testing."""
+        return Memory(
+            id="test-id",
+            content="Test content",
+            content_hash="abc123",
+            type=MemoryType.PREFERENCE,
+        )
+
+    def test_expanded_memory_creation(self, sample_memory):
+        """Should create ExpandedMemory with required fields."""
+        expanded = ExpandedMemory(
+            memory=sample_memory,
+            relevance_score=0.85,
+            hop_distance=1,
+        )
+        assert expanded.memory == sample_memory
+        assert expanded.relevance_score == 0.85
+        assert expanded.hop_distance == 1
+
+    def test_expanded_memory_default_values(self, sample_memory):
+        """Should have correct default values."""
+        expanded = ExpandedMemory(
+            memory=sample_memory,
+            relevance_score=0.75,
+            hop_distance=2,
+        )
+        assert expanded.path == []
+        assert expanded.edge_weight_product == 1.0
+        assert expanded.explanation == ""
+
+    def test_expanded_memory_with_path(self, sample_memory):
+        """Should accept path list of edge types."""
+        expanded = ExpandedMemory(
+            memory=sample_memory,
+            relevance_score=0.6,
+            hop_distance=2,
+            path=["supersedes", "relates_to"],
+        )
+        assert expanded.path == ["supersedes", "relates_to"]
+        assert len(expanded.path) == 2
+
+    def test_expanded_memory_with_edge_weight_product(self, sample_memory):
+        """Should accept edge weight product."""
+        expanded = ExpandedMemory(
+            memory=sample_memory,
+            relevance_score=0.5,
+            hop_distance=3,
+            edge_weight_product=0.49,  # 0.7 * 0.7
+        )
+        assert expanded.edge_weight_product == 0.49
+
+    def test_expanded_memory_with_explanation(self, sample_memory):
+        """Should accept explanation string."""
+        expanded = ExpandedMemory(
+            memory=sample_memory,
+            relevance_score=0.7,
+            hop_distance=1,
+            explanation="1 hop via supersedes, combined weight 0.70",
+        )
+        assert expanded.explanation == "1 hop via supersedes, combined weight 0.70"
+
+    def test_expanded_memory_full_construction(self, sample_memory):
+        """Should handle all fields including explanation."""
+        expanded = ExpandedMemory(
+            memory=sample_memory,
+            relevance_score=0.42,
+            hop_distance=2,
+            path=["supersedes", "relates_to"],
+            edge_weight_product=0.6,
+            explanation="2 hops via supersedes → relates_to, combined weight 0.42",
+        )
+        assert expanded.memory.id == "test-id"
+        assert expanded.relevance_score == 0.42
+        assert expanded.hop_distance == 2
+        assert expanded.path == ["supersedes", "relates_to"]
+        assert expanded.edge_weight_product == 0.6
+        assert "2 hops" in expanded.explanation
+
+    def test_expanded_memory_zero_hop_distance(self, sample_memory):
+        """Should allow hop_distance=0 for direct matches."""
+        expanded = ExpandedMemory(
+            memory=sample_memory,
+            relevance_score=1.0,
+            hop_distance=0,
+        )
+        assert expanded.hop_distance == 0
+
+    def test_expanded_memory_field_access(self, sample_memory):
+        """Should provide direct access to underlying memory fields."""
+        expanded = ExpandedMemory(
+            memory=sample_memory,
+            relevance_score=0.8,
+            hop_distance=1,
+        )
+        # Access nested memory properties
+        assert expanded.memory.content == "Test content"
+        assert expanded.memory.type == MemoryType.PREFERENCE
+        assert expanded.memory.namespace == "global"
+
+
+class TestGraphExpansionConfig:
+    """Tests for GraphExpansionConfig dataclass."""
+
+    def test_graph_expansion_config_default_values(self):
+        """Should have correct default values."""
+        config = GraphExpansionConfig()
+        assert config.max_depth == 1
+        assert config.decay_factor == 0.7
+        assert config.include_edge_types is None
+        assert config.exclude_edge_types is None
+        assert config.max_expanded == 20
+
+    def test_graph_expansion_config_safety_guards_defaults(self):
+        """Should have safety guard defaults set by __post_init__."""
+        config = GraphExpansionConfig()
+        assert config.max_nodes_visited == 200
+        assert config.max_edges_per_node == 10
+
+    def test_graph_expansion_config_default_edge_type_weights(self):
+        """Should set default edge type weights in __post_init__."""
+        config = GraphExpansionConfig()
+        assert config.edge_type_weights["supersedes"] == 1.0
+        assert config.edge_type_weights["caused_by"] == 0.9
+        assert config.edge_type_weights["relates_to"] == 0.7
+        assert config.edge_type_weights["contradicts"] == 0.5
+
+    def test_graph_expansion_config_custom_max_depth(self):
+        """Should accept custom max_depth."""
+        config = GraphExpansionConfig(max_depth=3)
+        assert config.max_depth == 3
+
+    def test_graph_expansion_config_custom_decay_factor(self):
+        """Should accept custom decay_factor."""
+        config = GraphExpansionConfig(decay_factor=0.8)
+        assert config.decay_factor == 0.8
+
+    def test_graph_expansion_config_custom_edge_type_weights(self):
+        """Should merge custom weights with defaults."""
+        custom_weights = {"supersedes": 0.5, "custom_type": 0.3}
+        config = GraphExpansionConfig(edge_type_weights=custom_weights)
+
+        # Custom values should override defaults
+        assert config.edge_type_weights["supersedes"] == 0.5
+        assert config.edge_type_weights["custom_type"] == 0.3
+        # Defaults should still be present for other types
+        assert config.edge_type_weights["caused_by"] == 0.9
+        assert config.edge_type_weights["relates_to"] == 0.7
+        assert config.edge_type_weights["contradicts"] == 0.5
+
+    def test_graph_expansion_config_include_edge_types(self):
+        """Should accept include_edge_types set."""
+        config = GraphExpansionConfig(include_edge_types={"supersedes", "relates_to"})
+        assert config.include_edge_types == {"supersedes", "relates_to"}
+        assert "supersedes" in config.include_edge_types
+        assert "contradicts" not in config.include_edge_types
+
+    def test_graph_expansion_config_exclude_edge_types(self):
+        """Should accept exclude_edge_types set."""
+        config = GraphExpansionConfig(exclude_edge_types={"contradicts"})
+        assert config.exclude_edge_types == {"contradicts"}
+        assert "contradicts" in config.exclude_edge_types
+
+    def test_graph_expansion_config_custom_max_expanded(self):
+        """Should accept custom max_expanded."""
+        config = GraphExpansionConfig(max_expanded=50)
+        assert config.max_expanded == 50
+
+    def test_graph_expansion_config_custom_safety_guards(self):
+        """Should accept custom safety guard values."""
+        config = GraphExpansionConfig(
+            max_nodes_visited=500,
+            max_edges_per_node=25,
+        )
+        assert config.max_nodes_visited == 500
+        assert config.max_edges_per_node == 25
+
+    def test_graph_expansion_config_full_construction(self):
+        """Should handle all configuration options."""
+        config = GraphExpansionConfig(
+            max_depth=2,
+            decay_factor=0.8,
+            edge_type_weights={"supersedes": 1.0},
+            include_edge_types={"supersedes", "caused_by"},
+            exclude_edge_types=None,
+            max_expanded=30,
+            max_nodes_visited=300,
+            max_edges_per_node=15,
+        )
+        assert config.max_depth == 2
+        assert config.decay_factor == 0.8
+        assert config.edge_type_weights["supersedes"] == 1.0
+        assert config.include_edge_types == {"supersedes", "caused_by"}
+        assert config.exclude_edge_types is None
+        assert config.max_expanded == 30
+        assert config.max_nodes_visited == 300
+        assert config.max_edges_per_node == 15
+
+    def test_graph_expansion_config_edge_weights_not_mutated(self):
+        """Creating config should not mutate passed dict."""
+        original_weights = {"supersedes": 0.5}
+        original_copy = dict(original_weights)
+
+        config = GraphExpansionConfig(edge_type_weights=original_weights)
+
+        # Config should have merged weights
+        assert "caused_by" in config.edge_type_weights
+        # Original dict should be unchanged (due to copy in merge)
+        # Note: The current implementation mutates the merged dict,
+        # but original is not affected because we create a new dict
+        assert original_weights == original_copy or "caused_by" not in original_weights

@@ -1,5 +1,6 @@
 """Unit tests for memory operations module."""
 
+import re
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -8,6 +9,7 @@ import pytest
 from recall.memory.operations import (
     ForgetResult,
     _compute_content_hash,
+    _expand_related_memories,
     _generate_memory_id,
     memory_context,
     memory_forget,
@@ -15,7 +17,15 @@ from recall.memory.operations import (
     memory_relate,
     memory_store,
 )
-from recall.memory.types import MemoryType, RecallResult, RelationType, StoreResult
+from recall.memory.types import (
+    ExpandedMemory,
+    GraphExpansionConfig,
+    Memory,
+    MemoryType,
+    RecallResult,
+    RelationType,
+    StoreResult,
+)
 from recall.storage.hybrid import HybridStore
 from recall.storage.sqlite import SQLiteStore
 from recall.storage.chromadb import ChromaStore
@@ -957,19 +967,20 @@ class TestMemoryRecall:
             include_related=True,
         )
 
-        assert len(result.memories) == 2
-        assert result.total == 2
+        # Primary memories only in result.memories
+        assert len(result.memories) == 1
+        assert result.total == 1
+        assert result.memories[0].id == "mem_1"
+
+        # Expanded memories in result.expanded_memories
+        assert len(result.expanded_memories) == 1
+        assert result.expanded_memories[0].memory.id == "mem_2"
 
         # Verify edges were fetched
         mock_store.get_edges.assert_called_once_with("mem_1", direction="both")
 
         # Verify related memory was fetched
         mock_store.get_memory.assert_called_once_with("mem_2")
-
-        # Check that related memory is included
-        memory_ids = [m.id for m in result.memories]
-        assert "mem_1" in memory_ids
-        assert "mem_2" in memory_ids
 
     @pytest.mark.asyncio
     async def test_memory_recall_graph_expansion_skips_duplicates(self, mock_store):
@@ -1069,9 +1080,13 @@ class TestMemoryRecall:
             include_related=True,
         )
 
-        assert len(result.memories) == 2
-        memory_ids = [m.id for m in result.memories]
-        assert "mem_3" in memory_ids
+        # Primary memory is in result.memories
+        assert len(result.memories) == 1
+        assert result.memories[0].id == "mem_1"
+
+        # Expanded memory (via incoming edge) is in result.expanded_memories
+        assert len(result.expanded_memories) == 1
+        assert result.expanded_memories[0].memory.id == "mem_3"
 
     @pytest.mark.asyncio
     async def test_memory_recall_no_results(self, mock_store):
@@ -1227,13 +1242,16 @@ class TestMemoryRecall:
             min_importance=0.5,
         )
 
-        # Primary memory (0.8) and high importance related (0.7) should be included
+        # Primary memory (0.8) should be in result.memories
+        assert len(result.memories) == 1
+        assert result.memories[0].id == "mem_1"
+
+        # High importance related (0.7) should be in result.expanded_memories
         # Low importance related (0.3) should be filtered out
-        assert len(result.memories) == 2
-        memory_ids = [m.id for m in result.memories]
-        assert "mem_1" in memory_ids
-        assert "mem_high" in memory_ids
-        assert "mem_low" not in memory_ids
+        assert len(result.expanded_memories) == 1
+        assert result.expanded_memories[0].memory.id == "mem_high"
+        expanded_ids = [em.memory.id for em in result.expanded_memories]
+        assert "mem_low" not in expanded_ids
 
 
 class TestMemoryRecallIntegration:
@@ -2585,3 +2603,933 @@ class TestMemoryForgetIntegration:
         # Verify memory is gone from get_memory (which queries SQLite)
         memory = await integration_store.get_memory(memory_id)
         assert memory is None
+
+
+# ============================================================================
+# Multi-Hop Graph Expansion Tests
+# ============================================================================
+
+
+class TestMultiHopGraphExpansion:
+    """Tests for multi-hop graph expansion behavior."""
+
+    @pytest.fixture
+    def mock_store(self):
+        """Create mock HybridStore for graph expansion testing."""
+        store = MagicMock(spec=HybridStore)
+        store.get_edges = MagicMock(return_value=[])
+        store.get_memory = AsyncMock(return_value=None)
+        return store
+
+    def _create_memory_dict(self, mem_id: str, content: str = "Test content", importance: float = 0.5):
+        """Helper to create memory dict for mocking."""
+        return {
+            "id": mem_id,
+            "content": content,
+            "content_hash": f"hash_{mem_id}",
+            "type": "preference",
+            "namespace": "global",
+            "importance": importance,
+            "confidence": 0.3,
+            "created_at": 1700000000.0,
+            "accessed_at": 1700000000.0,
+            "access_count": 0,
+        }
+
+    def _create_memory_obj(self, mem_id: str, content: str = "Test content") -> Memory:
+        """Helper to create Memory object for primary_memories."""
+        return Memory(
+            id=mem_id,
+            content=content,
+            content_hash=f"hash_{mem_id}",
+            type=MemoryType.PREFERENCE,
+        )
+
+    @pytest.mark.asyncio
+    async def test_multi_hop_depth_2_finds_transitive_memory(self, mock_store):
+        """Test that depth=2 finds memories 2 hops away (A->B->C finds C)."""
+        # Setup: A -> B -> C
+        # A is primary memory, B is 1 hop away, C is 2 hops away
+        primary_memory = self._create_memory_obj("mem_A", "Primary memory A")
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 0.9}]
+            elif mem_id == "mem_B":
+                return [{"id": 2, "source_id": "mem_B", "target_id": "mem_C", "edge_type": "relates_to", "weight": 0.8}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        async def get_memory_side_effect(mem_id):
+            if mem_id == "mem_B":
+                return self._create_memory_dict("mem_B", "Memory B")
+            elif mem_id == "mem_C":
+                return self._create_memory_dict("mem_C", "Memory C")
+            return None
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(max_depth=2, decay_factor=0.7)
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        # Should find both B (1 hop) and C (2 hops)
+        expanded_ids = [em.memory.id for em in result]
+        assert "mem_B" in expanded_ids
+        assert "mem_C" in expanded_ids
+
+        # C should have hop_distance=2
+        mem_c = next(em for em in result if em.memory.id == "mem_C")
+        assert mem_c.hop_distance == 2
+
+    @pytest.mark.asyncio
+    async def test_depth_1_does_not_find_2_hop_memory(self, mock_store):
+        """Test that depth=1 only finds direct neighbors, not 2-hop memories."""
+        primary_memory = self._create_memory_obj("mem_A", "Primary memory A")
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 0.9}]
+            elif mem_id == "mem_B":
+                return [{"id": 2, "source_id": "mem_B", "target_id": "mem_C", "edge_type": "relates_to", "weight": 0.8}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        async def get_memory_side_effect(mem_id):
+            if mem_id == "mem_B":
+                return self._create_memory_dict("mem_B", "Memory B")
+            elif mem_id == "mem_C":
+                return self._create_memory_dict("mem_C", "Memory C")
+            return None
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(max_depth=1, decay_factor=0.7)
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        # Should only find B (1 hop)
+        expanded_ids = [em.memory.id for em in result]
+        assert "mem_B" in expanded_ids
+        assert "mem_C" not in expanded_ids
+
+    @pytest.mark.asyncio
+    async def test_cycle_detection_prevents_infinite_loop(self, mock_store):
+        """Test that cycles in the graph don't cause infinite loops (A->B->A)."""
+        primary_memory = self._create_memory_obj("mem_A", "Primary memory A")
+
+        call_count = {"mem_A": 0, "mem_B": 0}
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            call_count[mem_id] = call_count.get(mem_id, 0) + 1
+            if mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 0.9}]
+            elif mem_id == "mem_B":
+                # B points back to A, creating a cycle
+                return [{"id": 2, "source_id": "mem_B", "target_id": "mem_A", "edge_type": "relates_to", "weight": 0.8}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        async def get_memory_side_effect(mem_id):
+            if mem_id == "mem_B":
+                return self._create_memory_dict("mem_B", "Memory B")
+            return None
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(max_depth=5, decay_factor=0.7)
+
+        # Should complete without hanging
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        # Should only find B once, A should be skipped as it's in primary memories
+        expanded_ids = [em.memory.id for em in result]
+        assert expanded_ids.count("mem_B") == 1
+        assert "mem_A" not in expanded_ids  # A is a primary memory, so it's in seen_ids
+
+    @pytest.mark.asyncio
+    async def test_cycle_detection_with_larger_cycle(self, mock_store):
+        """Test cycle detection with A->B->C->A pattern."""
+        primary_memory = self._create_memory_obj("mem_A", "Primary memory A")
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 0.9}]
+            elif mem_id == "mem_B":
+                return [{"id": 2, "source_id": "mem_B", "target_id": "mem_C", "edge_type": "relates_to", "weight": 0.8}]
+            elif mem_id == "mem_C":
+                # C points back to A
+                return [{"id": 3, "source_id": "mem_C", "target_id": "mem_A", "edge_type": "relates_to", "weight": 0.7}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        async def get_memory_side_effect(mem_id):
+            if mem_id == "mem_B":
+                return self._create_memory_dict("mem_B", "Memory B")
+            elif mem_id == "mem_C":
+                return self._create_memory_dict("mem_C", "Memory C")
+            return None
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(max_depth=10, decay_factor=0.7)
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        # Should find B and C, but not re-visit A
+        expanded_ids = [em.memory.id for em in result]
+        assert "mem_B" in expanded_ids
+        assert "mem_C" in expanded_ids
+        assert "mem_A" not in expanded_ids
+
+
+class TestRelevanceScoring:
+    """Tests for relevance score calculation using geometric mean formula."""
+
+    @pytest.fixture
+    def mock_store(self):
+        """Create mock HybridStore for scoring tests."""
+        store = MagicMock(spec=HybridStore)
+        store.get_edges = MagicMock(return_value=[])
+        store.get_memory = AsyncMock(return_value=None)
+        return store
+
+    def _create_memory_obj(self, mem_id: str) -> Memory:
+        return Memory(
+            id=mem_id,
+            content="Test content",
+            content_hash=f"hash_{mem_id}",
+            type=MemoryType.PREFERENCE,
+        )
+
+    def _create_memory_dict(self, mem_id: str, importance: float = 0.5):
+        return {
+            "id": mem_id,
+            "content": "Test content",
+            "content_hash": f"hash_{mem_id}",
+            "type": "preference",
+            "namespace": "global",
+            "importance": importance,
+            "confidence": 0.3,
+            "created_at": 1700000000.0,
+            "accessed_at": 1700000000.0,
+            "access_count": 0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_geometric_mean_single_edge(self, mock_store):
+        """Test relevance score with single edge uses type weight directly."""
+        primary_memory = self._create_memory_obj("mem_A")
+
+        mock_store.get_edges.return_value = [
+            {"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "supersedes", "weight": 1.0}
+        ]
+        mock_store.get_memory.return_value = self._create_memory_dict("mem_B")
+
+        config = GraphExpansionConfig(max_depth=1, decay_factor=0.7)
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        assert len(result) == 1
+        # For 1 hop with supersedes (weight=1.0):
+        # decay = 0.7^1 = 0.7
+        # path_weight = 1.0
+        # geometric_mean = (1.0)^(1/1) = 1.0  (supersedes default weight is 1.0)
+        # relevance = 0.7 * 1.0 * 1.0 = 0.7
+        assert result[0].relevance_score == pytest.approx(0.7, rel=0.01)
+
+    @pytest.mark.asyncio
+    async def test_geometric_mean_two_edges(self, mock_store):
+        """Test geometric mean calculation with two edges in path."""
+        primary_memory = self._create_memory_obj("mem_A")
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "supersedes", "weight": 1.0}]
+            elif mem_id == "mem_B":
+                return [{"id": 2, "source_id": "mem_B", "target_id": "mem_C", "edge_type": "relates_to", "weight": 1.0}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        async def get_memory_side_effect(mem_id):
+            if mem_id == "mem_B":
+                return self._create_memory_dict("mem_B")
+            elif mem_id == "mem_C":
+                return self._create_memory_dict("mem_C")
+            return None
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(max_depth=2, decay_factor=0.7)
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        # Find the 2-hop memory (C)
+        mem_c = next((em for em in result if em.memory.id == "mem_C"), None)
+        assert mem_c is not None
+
+        # For 2 hops with supersedes (1.0) -> relates_to (0.7):
+        # decay = 0.7^2 = 0.49
+        # path_weight = 1.0 * 1.0 = 1.0
+        # geometric_mean = sqrt(1.0 * 0.7) = sqrt(0.7) ≈ 0.837
+        # relevance = 0.49 * 1.0 * 0.837 ≈ 0.41
+        expected_geo_mean = (1.0 * 0.7) ** 0.5  # sqrt(0.7) ≈ 0.837
+        expected_relevance = 0.49 * 1.0 * expected_geo_mean
+        assert mem_c.relevance_score == pytest.approx(expected_relevance, rel=0.05)
+
+    @pytest.mark.asyncio
+    async def test_min_importance_post_score_cutoff(self, mock_store):
+        """Test that memories with importance < min_importance are excluded."""
+        primary_memory = self._create_memory_obj("mem_A")
+
+        mock_store.get_edges.return_value = [
+            {"id": 1, "source_id": "mem_A", "target_id": "mem_low", "edge_type": "relates_to", "weight": 1.0},
+            {"id": 2, "source_id": "mem_A", "target_id": "mem_high", "edge_type": "relates_to", "weight": 1.0},
+        ]
+
+        async def get_memory_side_effect(mem_id):
+            if mem_id == "mem_low":
+                return self._create_memory_dict("mem_low", importance=0.2)
+            elif mem_id == "mem_high":
+                return self._create_memory_dict("mem_high", importance=0.8)
+            return None
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(max_depth=1)
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+            min_importance=0.5,  # Filter out low importance
+        )
+
+        # Should only find high importance memory
+        expanded_ids = [em.memory.id for em in result]
+        assert "mem_high" in expanded_ids
+        assert "mem_low" not in expanded_ids
+
+    @pytest.mark.asyncio
+    async def test_results_sorted_by_relevance_descending(self, mock_store):
+        """Test that results are sorted by relevance_score descending."""
+        primary_memory = self._create_memory_obj("mem_A")
+
+        mock_store.get_edges.return_value = [
+            {"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "contradicts", "weight": 0.5},  # Lower score
+            {"id": 2, "source_id": "mem_A", "target_id": "mem_C", "edge_type": "supersedes", "weight": 1.0},  # Higher score
+        ]
+
+        async def get_memory_side_effect(mem_id):
+            return self._create_memory_dict(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(max_depth=1, decay_factor=0.7)
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        assert len(result) == 2
+        # Should be sorted descending by relevance_score
+        assert result[0].relevance_score >= result[1].relevance_score
+
+
+class TestEdgeTypeFiltering:
+    """Tests for edge type include/exclude filtering."""
+
+    @pytest.fixture
+    def mock_store(self):
+        """Create mock HybridStore for filtering tests."""
+        store = MagicMock(spec=HybridStore)
+        store.get_edges = MagicMock(return_value=[])
+        store.get_memory = AsyncMock(return_value=None)
+        return store
+
+    def _create_memory_obj(self, mem_id: str) -> Memory:
+        return Memory(
+            id=mem_id,
+            content="Test content",
+            content_hash=f"hash_{mem_id}",
+            type=MemoryType.PREFERENCE,
+        )
+
+    def _create_memory_dict(self, mem_id: str):
+        return {
+            "id": mem_id,
+            "content": "Test content",
+            "content_hash": f"hash_{mem_id}",
+            "type": "preference",
+            "namespace": "global",
+            "importance": 0.5,
+            "confidence": 0.3,
+            "created_at": 1700000000.0,
+            "accessed_at": 1700000000.0,
+            "access_count": 0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_include_edge_types_filters_correctly(self, mock_store):
+        """Test that include_edge_types only follows specified edge types."""
+        primary_memory = self._create_memory_obj("mem_A")
+
+        mock_store.get_edges.return_value = [
+            {"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "supersedes", "weight": 1.0},
+            {"id": 2, "source_id": "mem_A", "target_id": "mem_C", "edge_type": "relates_to", "weight": 1.0},
+            {"id": 3, "source_id": "mem_A", "target_id": "mem_D", "edge_type": "contradicts", "weight": 1.0},
+        ]
+
+        async def get_memory_side_effect(mem_id):
+            return self._create_memory_dict(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(
+            max_depth=1,
+            include_edge_types={"supersedes"},  # Only follow supersedes edges
+        )
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        # Should only find mem_B (via supersedes)
+        expanded_ids = [em.memory.id for em in result]
+        assert "mem_B" in expanded_ids
+        assert "mem_C" not in expanded_ids
+        assert "mem_D" not in expanded_ids
+
+    @pytest.mark.asyncio
+    async def test_exclude_edge_types_filters_correctly(self, mock_store):
+        """Test that exclude_edge_types skips specified edge types."""
+        primary_memory = self._create_memory_obj("mem_A")
+
+        mock_store.get_edges.return_value = [
+            {"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "supersedes", "weight": 1.0},
+            {"id": 2, "source_id": "mem_A", "target_id": "mem_C", "edge_type": "relates_to", "weight": 1.0},
+            {"id": 3, "source_id": "mem_A", "target_id": "mem_D", "edge_type": "contradicts", "weight": 1.0},
+        ]
+
+        async def get_memory_side_effect(mem_id):
+            return self._create_memory_dict(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(
+            max_depth=1,
+            exclude_edge_types={"contradicts"},  # Skip contradicts edges
+        )
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        # Should find mem_B and mem_C, but not mem_D
+        expanded_ids = [em.memory.id for em in result]
+        assert "mem_B" in expanded_ids
+        assert "mem_C" in expanded_ids
+        assert "mem_D" not in expanded_ids
+
+    @pytest.mark.asyncio
+    async def test_include_multiple_edge_types(self, mock_store):
+        """Test include_edge_types with multiple types."""
+        primary_memory = self._create_memory_obj("mem_A")
+
+        mock_store.get_edges.return_value = [
+            {"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "supersedes", "weight": 1.0},
+            {"id": 2, "source_id": "mem_A", "target_id": "mem_C", "edge_type": "caused_by", "weight": 1.0},
+            {"id": 3, "source_id": "mem_A", "target_id": "mem_D", "edge_type": "contradicts", "weight": 1.0},
+        ]
+
+        async def get_memory_side_effect(mem_id):
+            return self._create_memory_dict(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(
+            max_depth=1,
+            include_edge_types={"supersedes", "caused_by"},
+        )
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        # Should find mem_B and mem_C (supersedes and caused_by), but not mem_D (contradicts)
+        expanded_ids = [em.memory.id for em in result]
+        assert "mem_B" in expanded_ids
+        assert "mem_C" in expanded_ids
+        assert "mem_D" not in expanded_ids
+
+
+class TestExpansionLimits:
+    """Tests for expansion safety limits."""
+
+    @pytest.fixture
+    def mock_store(self):
+        """Create mock HybridStore for limit tests."""
+        store = MagicMock(spec=HybridStore)
+        store.get_edges = MagicMock(return_value=[])
+        store.get_memory = AsyncMock(return_value=None)
+        return store
+
+    def _create_memory_obj(self, mem_id: str) -> Memory:
+        return Memory(
+            id=mem_id,
+            content="Test content",
+            content_hash=f"hash_{mem_id}",
+            type=MemoryType.PREFERENCE,
+        )
+
+    def _create_memory_dict(self, mem_id: str):
+        return {
+            "id": mem_id,
+            "content": "Test content",
+            "content_hash": f"hash_{mem_id}",
+            "type": "preference",
+            "namespace": "global",
+            "importance": 0.5,
+            "confidence": 0.3,
+            "created_at": 1700000000.0,
+            "accessed_at": 1700000000.0,
+            "access_count": 0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_max_edges_per_node_limits_expansion(self, mock_store):
+        """Test that max_edges_per_node limits edges followed from each node."""
+        primary_memory = self._create_memory_obj("mem_A")
+
+        # Return more edges than the limit
+        mock_store.get_edges.return_value = [
+            {"id": i, "source_id": "mem_A", "target_id": f"mem_{i}", "edge_type": "relates_to", "weight": 1.0}
+            for i in range(20)  # 20 edges
+        ]
+
+        async def get_memory_side_effect(mem_id):
+            return self._create_memory_dict(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(
+            max_depth=1,
+            max_edges_per_node=5,  # Only process first 5 edges
+        )
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        # Should only expand 5 memories due to max_edges_per_node
+        assert len(result) == 5
+
+    @pytest.mark.asyncio
+    async def test_max_expanded_limits_total_results(self, mock_store):
+        """Test that max_expanded limits total expanded memories returned."""
+        primary_memory = self._create_memory_obj("mem_A")
+
+        # Return many edges
+        mock_store.get_edges.return_value = [
+            {"id": i, "source_id": "mem_A", "target_id": f"mem_{i}", "edge_type": "relates_to", "weight": 1.0}
+            for i in range(50)
+        ]
+
+        async def get_memory_side_effect(mem_id):
+            return self._create_memory_dict(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(
+            max_depth=1,
+            max_expanded=10,  # Only return 10 expanded memories
+            max_edges_per_node=50,  # Allow all edges to be processed
+        )
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        # Should stop at max_expanded
+        assert len(result) == 10
+
+    @pytest.mark.asyncio
+    async def test_max_nodes_visited_stops_expansion(self, mock_store):
+        """Test that max_nodes_visited stops BFS early."""
+        primary_memory = self._create_memory_obj("mem_A")
+
+        # Create a linear chain A -> B -> C -> D -> ... (many nodes)
+        def get_edges_side_effect(mem_id, direction="both"):
+            # Extract node number from mem_X format
+            if mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_1", "edge_type": "relates_to", "weight": 1.0}]
+            elif mem_id.startswith("mem_"):
+                try:
+                    node_num = int(mem_id.split("_")[1])
+                    if node_num < 100:  # Create chain up to 100 nodes
+                        return [{"id": node_num + 1, "source_id": mem_id, "target_id": f"mem_{node_num + 1}", "edge_type": "relates_to", "weight": 1.0}]
+                except (ValueError, IndexError):
+                    pass
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        async def get_memory_side_effect(mem_id):
+            return self._create_memory_dict(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(
+            max_depth=100,  # Allow deep traversal
+            max_nodes_visited=5,  # But limit nodes visited
+            max_expanded=100,  # Don't limit by this
+        )
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        # Should stop due to max_nodes_visited
+        assert len(result) <= 5
+
+
+class TestExplanationField:
+    """Tests for explanation field format verification."""
+
+    @pytest.fixture
+    def mock_store(self):
+        """Create mock HybridStore for explanation tests."""
+        store = MagicMock(spec=HybridStore)
+        store.get_edges = MagicMock(return_value=[])
+        store.get_memory = AsyncMock(return_value=None)
+        return store
+
+    def _create_memory_obj(self, mem_id: str) -> Memory:
+        return Memory(
+            id=mem_id,
+            content="Test content",
+            content_hash=f"hash_{mem_id}",
+            type=MemoryType.PREFERENCE,
+        )
+
+    def _create_memory_dict(self, mem_id: str):
+        return {
+            "id": mem_id,
+            "content": "Test content",
+            "content_hash": f"hash_{mem_id}",
+            "type": "preference",
+            "namespace": "global",
+            "importance": 0.5,
+            "confidence": 0.3,
+            "created_at": 1700000000.0,
+            "accessed_at": 1700000000.0,
+            "access_count": 0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_explanation_format_single_hop(self, mock_store):
+        """Test explanation format for single hop matches regex."""
+        primary_memory = self._create_memory_obj("mem_A")
+
+        mock_store.get_edges.return_value = [
+            {"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "supersedes", "weight": 1.0}
+        ]
+        mock_store.get_memory.return_value = self._create_memory_dict("mem_B")
+
+        config = GraphExpansionConfig(max_depth=1)
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        assert len(result) == 1
+        # Regex pattern: "N hop(s) via edge_types, combined weight X.XX"
+        pattern = r"^\d+ hops? via .+, combined weight [0-9.]+$"
+        assert re.match(pattern, result[0].explanation), f"Explanation doesn't match pattern: {result[0].explanation}"
+
+        # Single hop should use "hop" (singular)
+        assert "1 hop via" in result[0].explanation
+
+    @pytest.mark.asyncio
+    async def test_explanation_format_multi_hop(self, mock_store):
+        """Test explanation format for multi-hop matches regex."""
+        primary_memory = self._create_memory_obj("mem_A")
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "supersedes", "weight": 1.0}]
+            elif mem_id == "mem_B":
+                return [{"id": 2, "source_id": "mem_B", "target_id": "mem_C", "edge_type": "relates_to", "weight": 0.8}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        async def get_memory_side_effect(mem_id):
+            return self._create_memory_dict(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        config = GraphExpansionConfig(max_depth=2)
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        # Find the 2-hop memory
+        mem_c = next((em for em in result if em.memory.id == "mem_C"), None)
+        assert mem_c is not None
+
+        # Regex pattern for multi-hop
+        pattern = r"^\d+ hops? via .+, combined weight [0-9.]+$"
+        assert re.match(pattern, mem_c.explanation), f"Explanation doesn't match pattern: {mem_c.explanation}"
+
+        # Multi-hop should use "hops" (plural)
+        assert "2 hops via" in mem_c.explanation
+        # Should show edge path with arrow
+        assert "→" in mem_c.explanation or " " in mem_c.explanation
+
+    @pytest.mark.asyncio
+    async def test_explanation_contains_edge_types(self, mock_store):
+        """Test that explanation contains the edge types in path."""
+        primary_memory = self._create_memory_obj("mem_A")
+
+        mock_store.get_edges.return_value = [
+            {"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "caused_by", "weight": 1.0}
+        ]
+        mock_store.get_memory.return_value = self._create_memory_dict("mem_B")
+
+        config = GraphExpansionConfig(max_depth=1)
+
+        result = await _expand_related_memories(
+            store=mock_store,
+            primary_memories=[primary_memory],
+            primary_scores=[0.9],
+            config=config,
+        )
+
+        assert len(result) == 1
+        assert "caused_by" in result[0].explanation
+
+
+class TestBackwardCompatibility:
+    """Tests for backward compatibility with original graph expansion behavior."""
+
+    @pytest.fixture
+    def mock_store(self):
+        """Create mock HybridStore for compatibility tests."""
+        store = MagicMock(spec=HybridStore)
+        store.search = AsyncMock(return_value=[])
+        store.get_edges = MagicMock(return_value=[])
+        store.get_memory = AsyncMock(return_value=None)
+        return store
+
+    def _create_search_result(self, mem_id: str, content: str = "Test", similarity: float = 0.9):
+        return {
+            "id": mem_id,
+            "content": content,
+            "content_hash": f"hash_{mem_id}",
+            "type": "preference",
+            "namespace": "global",
+            "importance": 0.5,
+            "created_at": 1700000000.0,
+            "accessed_at": 1700000000.0,
+            "access_count": 0,
+            "similarity": similarity,
+        }
+
+    def _create_memory_dict(self, mem_id: str):
+        return {
+            "id": mem_id,
+            "content": "Test content",
+            "content_hash": f"hash_{mem_id}",
+            "type": "preference",
+            "namespace": "global",
+            "importance": 0.5,
+            "confidence": 0.3,
+            "created_at": 1700000000.0,
+            "accessed_at": 1700000000.0,
+            "access_count": 0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_single_hop_expansion_unchanged(self, mock_store):
+        """Test that single-hop expansion with default config produces same results."""
+        # Setup A -> B -> C graph
+        mock_store.search.return_value = [self._create_search_result("mem_A", "Memory A")]
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 1.0}]
+            elif mem_id == "mem_B":
+                return [{"id": 2, "source_id": "mem_B", "target_id": "mem_C", "edge_type": "relates_to", "weight": 1.0}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+        mock_store.get_memory = AsyncMock(return_value=self._create_memory_dict("mem_B"))
+
+        # Call with default max_depth=1
+        result = await memory_recall(
+            store=mock_store,
+            query="test query",
+            include_related=True,
+            max_depth=1,  # Default single hop
+        )
+
+        # Should find primary and 1-hop related
+        assert len(result.memories) == 1
+        assert result.memories[0].id == "mem_A"
+
+        # Expanded should only contain 1-hop memory (B), not 2-hop (C)
+        assert len(result.expanded_memories) == 1
+        assert result.expanded_memories[0].memory.id == "mem_B"
+
+    @pytest.mark.asyncio
+    async def test_include_related_false_no_expansion(self, mock_store):
+        """Test that include_related=False still returns no expanded memories."""
+        mock_store.search.return_value = [self._create_search_result("mem_A")]
+
+        mock_store.get_edges.return_value = [
+            {"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 1.0}
+        ]
+
+        result = await memory_recall(
+            store=mock_store,
+            query="test query",
+            include_related=False,  # No expansion
+        )
+
+        # Should have primary memories but no expanded
+        assert len(result.memories) == 1
+        assert len(result.expanded_memories) == 0
+
+        # get_edges should not be called
+        mock_store.get_edges.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_recall_result_structure_unchanged(self, mock_store):
+        """Test that RecallResult structure is preserved."""
+        mock_store.search.return_value = [
+            self._create_search_result("mem_A", "Memory A", similarity=0.95)
+        ]
+
+        result = await memory_recall(
+            store=mock_store,
+            query="test query",
+        )
+
+        # Verify RecallResult fields exist and have expected types
+        assert isinstance(result, RecallResult)
+        assert isinstance(result.memories, list)
+        assert isinstance(result.total, int)
+        assert result.score is None or isinstance(result.score, float)
+        assert isinstance(result.expanded_memories, list)
+
+    @pytest.mark.asyncio
+    async def test_baseline_graph_expansion_consistency(self, mock_store):
+        """Test expansion with known A→B→C graph returns expected results."""
+        mock_store.search.return_value = [self._create_search_result("mem_A")]
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 1.0}]
+            elif mem_id == "mem_B":
+                return [{"id": 2, "source_id": "mem_B", "target_id": "mem_C", "edge_type": "relates_to", "weight": 1.0}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        async def get_memory_side_effect(mem_id):
+            if mem_id == "mem_B":
+                return self._create_memory_dict("mem_B")
+            elif mem_id == "mem_C":
+                return self._create_memory_dict("mem_C")
+            return None
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        # Single hop should find only B
+        result_1hop = await memory_recall(
+            store=mock_store,
+            query="test",
+            include_related=True,
+            max_depth=1,
+        )
+        expanded_ids_1hop = {em.memory.id for em in result_1hop.expanded_memories}
+        assert expanded_ids_1hop == {"mem_B"}
+
+        # Two hops should find both B and C
+        result_2hop = await memory_recall(
+            store=mock_store,
+            query="test",
+            include_related=True,
+            max_depth=2,
+        )
+        expanded_ids_2hop = {em.memory.id for em in result_2hop.expanded_memories}
+        assert expanded_ids_2hop == {"mem_B", "mem_C"}
+
+        # Verify count consistency
+        assert len(result_1hop.expanded_memories) == 1
+        assert len(result_2hop.expanded_memories) == 2

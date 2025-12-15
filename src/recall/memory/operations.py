@@ -5,13 +5,17 @@ including deduplication, embedding generation, and optional relationship creatio
 """
 
 import hashlib
+import math
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
 from recall.memory.types import (
     ApplyResult,
+    ExpandedMemory,
+    GraphExpansionConfig,
     Memory,
     MemoryType,
     OutcomeResult,
@@ -159,6 +163,178 @@ async def memory_store(
         return StoreResult(success=False, error=f"Failed to store memory: {e}")
 
 
+def _dict_to_memory(data: dict[str, Any]) -> Memory:
+    """Convert a storage dict to a Memory dataclass.
+
+    Handles MemoryType enum conversion with fallback to SESSION if the type
+    value is not recognized.
+
+    Args:
+        data: Dictionary containing memory data from storage
+
+    Returns:
+        Memory dataclass instance
+    """
+    # Extract memory type - convert string to MemoryType enum if possible
+    result_type = data.get("type", "session")
+    try:
+        mem_type = MemoryType(result_type)
+    except ValueError:
+        # Use SESSION as default if type doesn't match enum
+        mem_type = MemoryType.SESSION
+
+    return Memory(
+        id=data["id"],
+        content=data["content"],
+        content_hash=data.get("content_hash", ""),
+        type=mem_type,
+        namespace=data.get("namespace", "global"),
+        importance=data.get("importance", 0.5),
+        confidence=data.get("confidence", 0.3),
+        created_at=datetime.fromtimestamp(data.get("created_at", datetime.now().timestamp())),
+        accessed_at=datetime.fromtimestamp(data.get("accessed_at", datetime.now().timestamp())),
+        access_count=data.get("access_count", 0),
+        metadata=data.get("metadata"),
+    )
+
+
+async def _expand_related_memories(
+    store: HybridStore,
+    primary_memories: list[Memory],
+    primary_scores: list[float],
+    config: GraphExpansionConfig,
+    min_importance: float = 0.0,
+) -> list[ExpandedMemory]:
+    """Expand from seed memories using BFS traversal with relevance scoring.
+
+    Performs breadth-first search from the given seed memories, following edges
+    up to max_depth hops. Each expanded memory receives a relevance score based
+    on hop distance, edge weights, and edge type importance.
+
+    Relevance score formula:
+        relevance = decay_factor^hop_distance * path_weight_product * geometric_mean(type_weights)
+
+    Args:
+        store: HybridStore instance for edge traversal
+        primary_memories: List of starting memories from semantic search
+        primary_scores: List of similarity scores for each primary memory
+        config: GraphExpansionConfig controlling traversal behavior
+        min_importance: Minimum relevance score cutoff (skip if relevance_score < min_importance)
+
+    Returns:
+        List of ExpandedMemory objects discovered through graph traversal,
+        sorted by relevance_score descending
+    """
+    # Track visited nodes to prevent cycles
+    seen_ids: set[str] = {m.id for m in primary_memories}
+    expanded: list[ExpandedMemory] = []
+    nodes_visited = 0
+
+    # BFS queue: (memory_id, hop_distance, path_edges, path_weight)
+    # path_edges is a list of edge type strings
+    # path_weight is the product of edge weights along the path
+    queue: deque[tuple[str, int, list[str], float]] = deque()
+
+    # Initialize queue with primary memories (direct edges from them)
+    for memory in primary_memories:
+        queue.append((memory.id, 0, [], 1.0))
+
+    while queue and len(expanded) < config.max_expanded and nodes_visited < config.max_nodes_visited:
+        current_id, hop_distance, path_edges, path_weight = queue.popleft()
+        nodes_visited += 1
+
+        # Stop if we've exceeded max depth
+        if hop_distance >= config.max_depth:
+            continue
+
+        # Get edges from current node (both directions)
+        edges = store.get_edges(current_id, direction="both")
+
+        # Safety guard: limit edges per node
+        edges = edges[: config.max_edges_per_node]
+
+        for edge in edges:
+            # Determine the related memory ID (could be source or target)
+            related_id = edge["target_id"] if edge["source_id"] == current_id else edge["source_id"]
+
+            # Skip if already seen
+            if related_id in seen_ids:
+                continue
+
+            edge_type = edge.get("edge_type", "relates_to")
+
+            # Apply edge type filtering
+            if config.include_edge_types is not None and edge_type not in config.include_edge_types:
+                continue
+            if config.exclude_edge_types is not None and edge_type in config.exclude_edge_types:
+                continue
+
+            # Calculate new path metrics
+            edge_weight = edge.get("weight", 1.0)
+            new_path_weight = path_weight * edge_weight
+            new_path_edges = path_edges + [edge_type]
+            new_hop_distance = hop_distance + 1
+
+            # Compute relevance score
+            # decay_factor^hop_distance
+            decay_component = config.decay_factor ** new_hop_distance
+
+            # Geometric mean of type weights for edges in path
+            type_weights_product = 1.0
+            for e_type in new_path_edges:
+                type_weights_product *= config.edge_type_weights.get(e_type, 0.7)
+            geometric_mean = type_weights_product ** (1.0 / len(new_path_edges))
+
+            # Final relevance score
+            relevance_score = decay_component * new_path_weight * geometric_mean
+
+            # Fetch the related memory
+            related_data = await store.get_memory(related_id)
+            if related_data is None:
+                seen_ids.add(related_id)
+                continue
+
+            # Filter by memory's importance field (backward compatibility)
+            memory_importance = related_data.get("importance", 0.5)
+            if memory_importance < min_importance:
+                seen_ids.add(related_id)
+                continue
+
+            # Convert to Memory object
+            related_memory = _dict_to_memory(related_data)
+
+            # Generate explanation string
+            # Example: "2 hops via supersedes → relates_to, combined weight 0.42"
+            edge_path_str = " → ".join(new_path_edges)
+            explanation = f"{new_hop_distance} hop{'s' if new_hop_distance != 1 else ''} via {edge_path_str}, combined weight {relevance_score:.2f}"
+
+            # Create ExpandedMemory
+            expanded_memory = ExpandedMemory(
+                memory=related_memory,
+                relevance_score=relevance_score,
+                hop_distance=new_hop_distance,
+                path=new_path_edges,
+                edge_weight_product=new_path_weight,
+                explanation=explanation,
+            )
+
+            expanded.append(expanded_memory)
+            seen_ids.add(related_id)
+
+            # Add to queue for further expansion if within depth limit
+            if new_hop_distance < config.max_depth:
+                queue.append((related_id, new_hop_distance, new_path_edges, new_path_weight))
+
+            # Early termination if we've collected enough
+            if len(expanded) >= config.max_expanded:
+                break
+
+    # Sort by relevance score descending
+    expanded.sort(key=lambda x: x.relevance_score, reverse=True)
+
+    return expanded
+
+
 async def memory_recall(
     store: HybridStore,
     query: str,
@@ -167,11 +343,17 @@ async def memory_recall(
     memory_type: Optional[MemoryType] = None,
     min_importance: Optional[float] = None,
     include_related: bool = False,
+    max_depth: int = 1,
+    max_expanded: int = 20,
+    decay_factor: float = 0.7,
+    include_edge_types: Optional[list[str]] = None,
+    exclude_edge_types: Optional[list[str]] = None,
 ) -> RecallResult:
-    """Recall memories using semantic search with optional graph expansion.
+    """Recall memories using semantic search with optional multi-hop graph expansion.
 
     Performs semantic search using ChromaDB vector similarity, applies filters,
-    updates access statistics, and optionally expands results via graph edges.
+    updates access statistics, and optionally expands results via graph edges
+    using configurable multi-hop traversal.
 
     Args:
         store: HybridStore instance for storage operations
@@ -181,9 +363,15 @@ async def memory_recall(
         memory_type: Filter by memory type (optional)
         min_importance: Minimum importance score filter (0.0 to 1.0, optional)
         include_related: If True, include related memories via graph edges (default: False)
+        max_depth: Maximum number of hops for graph expansion (default: 1)
+        max_expanded: Maximum number of expanded memories to return (default: 20)
+        decay_factor: Factor by which relevance decays per hop (default: 0.7)
+        include_edge_types: Optional list of edge types to include (None means all)
+        exclude_edge_types: Optional list of edge types to exclude (None means none)
 
     Returns:
-        RecallResult containing matched memories, total count, and average score
+        RecallResult containing matched memories, total count, average score, and
+        expanded_memories list when include_related=True
 
     Example:
         >>> store = await HybridStore.create(ephemeral=True)
@@ -193,9 +381,13 @@ async def memory_recall(
         ...     namespace="project:myapp",
         ...     min_importance=0.5,
         ...     include_related=True,
+        ...     max_depth=2,
+        ...     decay_factor=0.8,
         ... )
         >>> for memory in result.memories:
         ...     print(f"{memory.id}: {memory.content}")
+        >>> for expanded in result.expanded_memories:
+        ...     print(f"{expanded.memory.id}: {expanded.explanation}")
     """
     if not query or not query.strip():
         return RecallResult(memories=[], total=0, score=None)
@@ -251,54 +443,34 @@ async def memory_recall(
                 scores.append(result["similarity"])
 
         # Expand via graph edges if include_related is True
-        related_memories: list[Memory] = []
+        expanded_memories: list[ExpandedMemory] = []
         if include_related and memories:
-            seen_ids = {m.id for m in memories}
+            # Convert list parameters to sets for O(1) lookup
+            include_types_set: Optional[set[str]] = None
+            if include_edge_types is not None:
+                include_types_set = set(include_edge_types)
 
-            for memory in memories:
-                # Get edges connected to this memory (both directions)
-                edges = store.get_edges(memory.id, direction="both")
+            exclude_types_set: Optional[set[str]] = None
+            if exclude_edge_types is not None:
+                exclude_types_set = set(exclude_edge_types)
 
-                for edge in edges:
-                    # Get the related memory ID (could be source or target)
-                    related_id = edge["target_id"] if edge["source_id"] == memory.id else edge["source_id"]
+            # Build GraphExpansionConfig from parameters
+            config = GraphExpansionConfig(
+                max_depth=max_depth,
+                decay_factor=decay_factor,
+                include_edge_types=include_types_set,
+                exclude_edge_types=exclude_types_set,
+                max_expanded=max_expanded,
+            )
 
-                    # Skip if we've already included this memory
-                    if related_id in seen_ids:
-                        continue
-
-                    # Fetch the related memory
-                    related_result = await store.get_memory(related_id)
-                    if related_result:
-                        # Filter related memory by min_importance if specified
-                        related_importance = related_result.get("importance", 0.5)
-                        if min_importance is not None and related_importance < min_importance:
-                            seen_ids.add(related_id)  # Mark as seen to avoid re-fetching
-                            continue
-
-                        # Convert to Memory object
-                        related_type = related_result.get("type", "session")
-                        try:
-                            rel_mem_type = MemoryType(related_type)
-                        except ValueError:
-                            rel_mem_type = MemoryType.SESSION
-
-                        related_memory = Memory(
-                            id=related_result["id"],
-                            content=related_result["content"],
-                            content_hash=related_result.get("content_hash", ""),
-                            type=rel_mem_type,
-                            namespace=related_result.get("namespace", "global"),
-                            importance=related_importance,
-                            created_at=datetime.fromtimestamp(related_result.get("created_at", datetime.now().timestamp())),
-                            accessed_at=datetime.fromtimestamp(related_result.get("accessed_at", datetime.now().timestamp())),
-                            access_count=related_result.get("access_count", 0),
-                        )
-                        related_memories.append(related_memory)
-                        seen_ids.add(related_id)
-
-        # Combine primary results with related memories
-        all_memories = memories + related_memories
+            # Call _expand_related_memories() helper
+            expanded_memories = await _expand_related_memories(
+                store=store,
+                primary_memories=memories,
+                primary_scores=scores,
+                config=config,
+                min_importance=min_importance if min_importance is not None else 0.0,
+            )
 
         # Calculate average score if we have scores
         avg_score: Optional[float] = None
@@ -306,9 +478,10 @@ async def memory_recall(
             avg_score = sum(scores) / len(scores)
 
         return RecallResult(
-            memories=all_memories,
-            total=len(all_memories),
+            memories=memories,
+            total=len(memories),
             score=avg_score,
+            expanded_memories=expanded_memories,
         )
 
     except Exception as e:

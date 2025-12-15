@@ -287,19 +287,47 @@ async def memory_recall_tool(
     memory_type: Optional[str] = None,
     min_importance: Optional[float] = None,
     include_related: bool = False,
+    max_depth: int = 1,
+    max_expanded: int = 20,
+    decay_factor: float = 0.7,
+    include_edge_types: Optional[list[str]] = None,
+    exclude_edge_types: Optional[list[str]] = None,
 ) -> dict[str, Any]:
-    """Recall memories using semantic search with optional graph expansion.
+    """Recall memories using semantic search with optional multi-hop graph expansion.
+
+    Performs semantic search using ChromaDB vector similarity, applies filters,
+    and optionally expands results via graph edges using configurable multi-hop
+    traversal.
 
     Args:
-        query: Search query text
-        n_results: Maximum number of results (default: 5)
-        namespace: Filter by namespace (optional)
-        memory_type: Filter by memory type (optional)
+        query: Search query text (will be embedded with mxbai query prefix)
+        n_results: Maximum number of primary results (default: 5)
+        namespace: Filter by namespace (optional, e.g., 'global' or 'project:myapp')
+        memory_type: Filter by memory type (optional, e.g., 'preference', 'decision')
         min_importance: Minimum importance score filter (0.0 to 1.0, optional)
-        include_related: If True, include related memories via graph edges
+        include_related: If True, include related memories via graph edges (default: False)
+        max_depth: Maximum number of hops for graph expansion (default: 1)
+        max_expanded: Maximum number of expanded memories to return (default: 20)
+        decay_factor: Factor by which relevance decays per hop (default: 0.7)
+        include_edge_types: Optional list of edge types to include (None means all).
+            Valid types: relates_to, supersedes, caused_by, contradicts
+        exclude_edge_types: Optional list of edge types to exclude (None means none).
+            Valid types: relates_to, supersedes, caused_by, contradicts
 
     Returns:
-        Dictionary with memories list, total count, and average score
+        Dictionary with:
+        - success: Boolean indicating operation success
+        - memories: List of primary memory dicts with id, content, type, etc.
+        - total: Total count of primary memories returned
+        - score: Average similarity score of primary memories (or None)
+        - expanded: List of expanded memory dicts (when include_related=True) with:
+            - id: Memory ID
+            - content: Memory content
+            - type: Memory type
+            - relevance_score: Combined relevance score (0.0 to 1.0)
+            - hop_distance: Number of edges traversed to reach this memory
+            - path: List of edge types in traversal order
+            - explanation: Human-readable relevance explanation
     """
     if hybrid_store is None:
         return {"success": False, "error": "Server not initialized"}
@@ -325,6 +353,11 @@ async def memory_recall_tool(
             memory_type=mem_type,
             min_importance=min_importance,
             include_related=include_related,
+            max_depth=max_depth,
+            max_expanded=max_expanded,
+            decay_factor=decay_factor,
+            include_edge_types=include_edge_types,
+            exclude_edge_types=exclude_edge_types,
         )
 
         # Convert Memory objects to dicts for JSON serialization
@@ -342,11 +375,25 @@ async def memory_recall_tool(
                 "access_count": memory.access_count,
             })
 
+        # Convert ExpandedMemory objects to dicts for JSON serialization
+        expanded_data = []
+        for expanded in result.expanded_memories:
+            expanded_data.append({
+                "id": expanded.memory.id,
+                "content": expanded.memory.content,
+                "type": expanded.memory.type.value,
+                "relevance_score": expanded.relevance_score,
+                "hop_distance": expanded.hop_distance,
+                "path": expanded.path,
+                "explanation": expanded.explanation,
+            })
+
         return {
             "success": True,
             "memories": memories_data,
             "total": result.total,
             "score": result.score,
+            "expanded": expanded_data,
         }
 
     except Exception as e:

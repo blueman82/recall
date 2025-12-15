@@ -185,6 +185,72 @@ class StoreResult:
 
 
 @dataclass
+class ExpandedMemory:
+    """A memory with graph expansion metadata.
+
+    Wraps a Memory object with additional information about how it was
+    discovered through graph traversal, including relevance scoring and
+    the path taken to reach it.
+
+    Attributes:
+        memory: The underlying Memory object
+        relevance_score: Combined relevance score (0.0 to 1.0) based on
+            semantic similarity and graph distance
+        hop_distance: Number of edges traversed to reach this memory (0 = direct match)
+        path: List of edge types (RelationType values) in traversal order
+        edge_weight_product: Product of all edge weights along the path
+        explanation: Human-readable explanation of why this memory is relevant
+    """
+    memory: Memory
+    relevance_score: float
+    hop_distance: int
+    path: list[str] = field(default_factory=list)
+    edge_weight_product: float = 1.0
+    explanation: str = ""
+
+
+@dataclass
+class GraphExpansionConfig:
+    """Configuration for graph expansion behavior during memory recall.
+
+    Controls how the graph is traversed when expanding from seed memories,
+    including edge type weighting, depth limits, and safety guards.
+
+    Attributes:
+        max_depth: Maximum number of edges to traverse from seed memories (default: 1)
+        decay_factor: Factor by which relevance decays per hop (default: 0.7)
+        edge_type_weights: Weights for different edge types (0.0 to 1.0).
+            Higher weights mean stronger relevance propagation.
+            Defaults: supersedes=1.0, caused_by=0.9, relates_to=0.7, contradicts=0.5
+        include_edge_types: Optional set of edge types to include (None means all)
+        exclude_edge_types: Optional set of edge types to exclude (None means none)
+        max_expanded: Maximum number of expanded memories to return
+        max_nodes_visited: Safety guard - maximum nodes to visit during traversal
+        max_edges_per_node: Safety guard - maximum edges to follow per node
+    """
+    max_depth: int = 1
+    decay_factor: float = 0.7
+    edge_type_weights: dict[str, float] = field(default_factory=dict)
+    include_edge_types: Optional[set[str]] = None
+    exclude_edge_types: Optional[set[str]] = None
+    max_expanded: int = 20
+    max_nodes_visited: int = 200
+    max_edges_per_node: int = 10
+
+    def __post_init__(self) -> None:
+        """Merge default edge type weights with caller-provided values."""
+        default_weights = {
+            "supersedes": 1.0,
+            "caused_by": 0.9,
+            "relates_to": 0.7,
+            "contradicts": 0.5,
+        }
+        # Merge defaults with caller-provided weights (caller takes precedence)
+        merged = {**default_weights, **self.edge_type_weights}
+        self.edge_type_weights = merged
+
+
+@dataclass
 class RecallResult:
     """Result of a memory recall/query operation.
 
@@ -196,10 +262,13 @@ class RecallResult:
         memories: List of Memory objects matching the query
         total: Total number of matching memories
         score: Relevance score for the search results (0.0 to 1.0)
+        expanded_memories: List of ExpandedMemory objects discovered through
+            graph traversal (populated when include_related=True)
     """
     memories: list[Memory] = field(default_factory=list)
     total: int = 0
     score: Optional[float] = None
+    expanded_memories: list[ExpandedMemory] = field(default_factory=list)
 
 
 @dataclass
