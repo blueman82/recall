@@ -1,0 +1,550 @@
+# ═══════════════════════════════════════════════════════════════
+# DATA FLOW REGISTRY
+# ═══════════════════════════════════════════════════════════════
+# PRODUCERS:
+#   Task 1 → ExpandedMemory (with explanation field), GraphExpansionConfig (with safety guards), updated RecallResult
+#   Task 2 → _dict_to_memory(), _expand_related_memories()
+#   Task 3 → updated memory_recall() with new parameters
+#   Task 4 → updated memory_recall_tool MCP handler
+# CONSUMERS:
+#   Task 2 → [1] (needs ExpandedMemory, GraphExpansionConfig)
+#   Task 3 → [1, 2] (needs structures and _expand_related_memories)
+#   Task 4 → [3] (needs updated memory_recall)
+#   Task 5 → [1, 2, 3] (tests all components)
+# VALIDATION: All consumers depend_on their producers ✓
+# ═══════════════════════════════════════════════════════════════
+# SUCCESS CRITERIA VALIDATION
+# ═══════════════════════════════════════════════════════════════
+# All criteria derived from key_points ✓
+# Same terminology in key_points and criteria ✓
+# Component tasks have CAPABILITY-only criteria ✓
+# Integration task (4) has MCP-level criteria ✓
+# ═══════════════════════════════════════════════════════════════
+
+conductor:
+  default_agent: python-pro
+  worktree_groups:
+    - group_id: "data-model"
+      description: "Data structures for graph expansion"
+      tasks: [1]
+      rationale: "Foundation dataclasses must exist first"
+    - group_id: "core-logic"
+      description: "Graph traversal implementation"
+      tasks: [2, 3]
+      rationale: "Helper functions and integration are coupled"
+    - group_id: "api-layer"
+      description: "MCP tool handler updates"
+      tasks: [4]
+      rationale: "Exposes new parameters via MCP"
+    - group_id: "testing"
+      description: "Comprehensive test coverage"
+      tasks: [5]
+      rationale: "Validates all components"
+
+plan:
+  metadata:
+    feature_name: "Multi-hop Graph Expansion"
+    created: "2025-12-15"
+    target: "Enhanced graph expansion with multi-hop traversal, relevance scoring, and type-filtered traversal"
+
+  context:
+    framework: "Python 3.13+ with MCP (FastMCP)"
+    architecture: "Layered: types → operations → storage → MCP handlers"
+    test_framework: "pytest with pytest-asyncio"
+
+  tasks:
+    # ═══════════════════════════════════════════════════════════════
+    # TASK 1: Data Structures
+    # ═══════════════════════════════════════════════════════════════
+    - task_number: "1"
+      name: "Add graph expansion data structures"
+      agent: "python-schema-architect"
+      files:
+        - "src/recall/memory/types.py"
+      depends_on: []
+      estimated_time: "20m"
+
+      success_criteria:
+        - "ExpandedMemory dataclass exists with fields: memory (Memory), relevance_score (float), hop_distance (int), path (list[str]), edge_weight_product (float), explanation (str)."
+        - "ExpandedMemory.path docstring specifies: edge types only (not memory IDs), in traversal order from primary result."
+        - "ExpandedMemory.explanation contains human-readable string like '2 hops via supersedes → relates_to, combined weight 0.42'."
+        - "GraphExpansionConfig dataclass exists with fields: max_depth (int, default=1), max_expanded (int, default=20), decay_factor (float, default=0.7), edge_type_weights (Optional[dict[str, float]]), include_edge_types (Optional[set[str]]), exclude_edge_types (Optional[set[str]]), max_nodes_visited (int, default=200), max_edges_per_node (int, default=10)."
+        - "GraphExpansionConfig.__post_init__ sets default edge_type_weights: supersedes=1.0, caused_by=0.9, relates_to=0.7, contradicts=0.5."
+        - "GraphExpansionConfig.max_nodes_visited and max_edges_per_node are internal safety guards (undocumented in MCP tool)."
+        - "RecallResult dataclass updated with expanded_memories field (list[ExpandedMemory], default empty list)."
+        - "All new dataclasses have docstrings explaining their purpose and attributes."
+        - "No TODO comments in production code paths."
+        - "No placeholder empty structs."
+        - "No unused variables."
+
+      test_commands:
+        - "uv run python -c \"from recall.memory.types import ExpandedMemory, GraphExpansionConfig, RecallResult; print('Import OK')\""
+        - "uv run pytest tests/unit/test_memory_types.py -v"
+
+      description: |
+        ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
+        ```bash
+        # Verify types.py exists and has RecallResult
+        grep -n "class RecallResult" src/recall/memory/types.py
+        ```
+
+        ## TASK DESCRIPTION
+        Add new dataclasses for graph expansion:
+        1. ExpandedMemory - wraps Memory with relevance scoring metadata
+        2. GraphExpansionConfig - configuration for expansion behavior
+        3. Update RecallResult to include expanded_memories field
+
+        ## PLACEMENT
+        Add new dataclasses AFTER the existing OutcomeResult class (line ~261).
+        Update RecallResult class (line ~188) to add expanded_memories field.
+
+      implementation:
+        approach: |
+          Add dataclasses following existing patterns in types.py.
+          Use field(default_factory=...) for mutable defaults.
+          Include comprehensive docstrings matching existing style.
+        key_points:
+          - point: "ExpandedMemory dataclass with relevance metadata and explanation"
+            details: "Contains memory, relevance_score, hop_distance, path (edge types in traversal order), edge_weight_product, explanation (human-readable string)"
+            reference: "src/recall/memory/types.py"
+          - point: "GraphExpansionConfig with default edge_type_weights and safety guards"
+            details: "__post_init__ sets defaults: supersedes=1.0, caused_by=0.9, relates_to=0.7, contradicts=0.5. Safety guards: max_nodes_visited=200, max_edges_per_node=10 (internal, undocumented)"
+            reference: "src/recall/memory/types.py"
+          - point: "RecallResult.expanded_memories field"
+            details: "list[ExpandedMemory] with default_factory=list"
+            reference: "src/recall/memory/types.py"
+        integration: {}
+
+      verification:
+        automated_tests:
+          command: "uv run pytest tests/unit/test_memory_types.py -v"
+          expected_output: "Tests pass"
+
+      code_quality:
+        python:
+          full_quality_pipeline:
+            command: |
+              uv run python -m py_compile src/recall/memory/types.py && uv run pytest tests/unit/test_memory_types.py -v
+            exit_on_failure: true
+
+      commit:
+        type: "feat"
+        message: "add ExpandedMemory and GraphExpansionConfig dataclasses for multi-hop graph expansion"
+        files:
+          - "src/recall/memory/types.py"
+
+    # ═══════════════════════════════════════════════════════════════
+    # TASK 2: Helper Functions
+    # ═══════════════════════════════════════════════════════════════
+    - task_number: "2"
+      name: "Implement graph expansion helper functions"
+      agent: "python-pro"
+      files:
+        - "src/recall/memory/operations.py"
+      depends_on: [1]
+      estimated_time: "45m"
+
+      success_criteria:
+        - "_dict_to_memory() function converts storage dict to Memory dataclass with proper type conversion and default handling."
+        - "_expand_related_memories() async function implements BFS traversal with deque queue."
+        - "_expand_related_memories() accepts parameters: store, primary_memories, primary_scores, config (GraphExpansionConfig), min_importance."
+        - "_expand_related_memories() uses seen_ids set for cycle detection and deduplication."
+        - "_expand_related_memories() respects config.include_edge_types filter when set."
+        - "_expand_related_memories() respects config.exclude_edge_types filter when set."
+        - "_expand_related_memories() computes type_importance using geometric mean across all edge types in path."
+        - "_expand_related_memories() computes relevance_score using formula: decay_factor^hop_distance * path_weight_product * geometric_mean(type_weights)."
+        - "_expand_related_memories() enforces config.max_nodes_visited safety guard (stops BFS when exceeded)."
+        - "_expand_related_memories() enforces config.max_edges_per_node safety guard (limits fan-out per node)."
+        - "_expand_related_memories() stops when len(expanded) >= config.max_expanded."
+        - "_expand_related_memories() stops BFS when depth >= config.max_depth."
+        - "_expand_related_memories() generates explanation string for each ExpandedMemory."
+        - "_expand_related_memories() returns list[ExpandedMemory] sorted by relevance_score descending."
+        - "No TODO comments in production code paths."
+        - "No placeholder empty structs."
+        - "No unused variables."
+        - "All imports from dependency tasks resolve."
+
+      test_commands:
+        - "uv run python -c \"from recall.memory.operations import _dict_to_memory, _expand_related_memories; print('Import OK')\""
+        - "uv run python -m py_compile src/recall/memory/operations.py"
+
+      description: |
+        ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
+        ```bash
+        # Verify Task 1 completed - types exist
+        uv run python -c "from recall.memory.types import ExpandedMemory, GraphExpansionConfig"
+
+        # Verify current expansion location
+        grep -n "include_related and memories" src/recall/memory/operations.py
+        ```
+
+        ## TASK DESCRIPTION
+        Add helper functions for graph expansion:
+        1. _dict_to_memory() - converts storage dict to Memory dataclass
+        2. _expand_related_memories() - BFS traversal with relevance scoring
+
+        ## PLACEMENT
+        Add functions BEFORE memory_recall() function (around line 160).
+        Import deque from collections at top of file.
+        Import ExpandedMemory, GraphExpansionConfig from types.
+        Import math for geometric mean calculation.
+
+      implementation:
+        approach: |
+          Implement BFS using collections.deque for efficient queue operations.
+          Queue items: (memory_id, hop_distance, path_edges, path_weight).
+          Process queue while len(expanded) < max_expanded AND nodes_visited < max_nodes_visited.
+          For each memory, get edges (capped by max_edges_per_node), filter by type, compute scores.
+          Use math.prod() and ** (1/n) for geometric mean of type weights.
+          Generate explanation string for each expanded memory.
+        key_points:
+          - point: "_dict_to_memory() with type conversion"
+            details: "Handles MemoryType enum conversion with ValueError fallback to SESSION"
+            reference: "src/recall/memory/operations.py"
+          - point: "_expand_related_memories() BFS with deque"
+            details: "Uses deque for O(1) popleft, processes in breadth-first order"
+            reference: "src/recall/memory/operations.py"
+          - point: "cycle detection via seen_ids set"
+            details: "Skip already-seen memory IDs to prevent infinite loops"
+            reference: "src/recall/memory/operations.py"
+          - point: "edge type filtering with include/exclude"
+            details: "Check config.include_edge_types and config.exclude_edge_types before following edge"
+            reference: "src/recall/memory/operations.py"
+          - point: "geometric mean for type_importance across path"
+            details: "type_importance = (prod(edge_type_weights[e] for e in path)) ** (1/len(path))"
+            reference: "src/recall/memory/operations.py"
+          - point: "relevance_score formula with geometric mean"
+            details: "relevance = decay_factor^hop_distance * path_weight_product * geometric_mean(type_weights)"
+            reference: "src/recall/memory/operations.py"
+          - point: "safety guards enforcement"
+            details: "Enforce max_nodes_visited and max_edges_per_node[:10] to prevent fan-out explosion"
+            reference: "src/recall/memory/operations.py"
+          - point: "explanation string generation"
+            details: "Generate '2 hops via supersedes → relates_to, combined weight 0.42' for each ExpandedMemory"
+            reference: "src/recall/memory/operations.py"
+          - point: "early termination at max_expanded and max_depth"
+            details: "Stop BFS when limits reached for performance"
+            reference: "src/recall/memory/operations.py"
+        integration:
+          imports:
+            - "recall.memory.types.ExpandedMemory"
+            - "recall.memory.types.GraphExpansionConfig"
+            - "math"
+
+      verification:
+        automated_tests:
+          command: "uv run python -m py_compile src/recall/memory/operations.py"
+          expected_output: "No output (success)"
+
+      code_quality:
+        python:
+          full_quality_pipeline:
+            command: |
+              uv run python -m py_compile src/recall/memory/operations.py
+            exit_on_failure: true
+
+      commit:
+        type: "feat"
+        message: "add _dict_to_memory and _expand_related_memories helpers for multi-hop BFS traversal with geometric mean scoring"
+        files:
+          - "src/recall/memory/operations.py"
+
+    # ═══════════════════════════════════════════════════════════════
+    # TASK 3: Core Integration
+    # ═══════════════════════════════════════════════════════════════
+    - task_number: "3"
+      name: "Integrate graph expansion into memory_recall"
+      agent: "python-pro"
+      files:
+        - "src/recall/memory/operations.py"
+      depends_on: [1, 2]
+      estimated_time: "30m"
+
+      success_criteria:
+        - "memory_recall() function signature updated with new parameters: max_depth (int, default=1), max_expanded (int, default=20), decay_factor (float, default=0.7), include_edge_types (Optional[list[str]]), exclude_edge_types (Optional[list[str]])."
+        - "memory_recall() creates GraphExpansionConfig from new parameters when include_related=True."
+        - "memory_recall() replaces inline expansion code (lines 253-301) with call to _expand_related_memories()."
+        - "memory_recall() populates RecallResult.expanded_memories with _expand_related_memories() result."
+        - "memory_recall() preserves backward compatibility: max_depth=1 produces same behavior as before."
+        - "memory_recall() docstring updated to document new parameters."
+        - "No TODO comments in production code paths."
+        - "No placeholder empty structs."
+        - "No unused variables."
+        - "All imports from dependency tasks resolve."
+
+      test_commands:
+        - "uv run python -c \"from recall.memory.operations import memory_recall; import inspect; sig = inspect.signature(memory_recall); assert 'max_depth' in sig.parameters; print('Signature OK')\""
+        - "uv run pytest tests/unit/test_memory_operations.py -v -k recall"
+
+      description: |
+        ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
+        ```bash
+        # Verify Task 2 completed - helpers exist
+        uv run python -c "from recall.memory.operations import _dict_to_memory, _expand_related_memories"
+
+        # Verify current memory_recall location
+        grep -n "async def memory_recall" src/recall/memory/operations.py
+        ```
+
+        ## TASK DESCRIPTION
+        Update memory_recall() to use the new _expand_related_memories() helper:
+        1. Add new parameters to function signature
+        2. Create GraphExpansionConfig when include_related=True
+        3. Replace inline expansion code with _expand_related_memories() call
+        4. Populate expanded_memories in RecallResult
+
+        ## CHANGES
+        - Update function signature (line ~162)
+        - Update docstring with new parameters
+        - Replace lines 253-301 with _expand_related_memories() call
+        - Update RecallResult construction
+
+      implementation:
+        approach: |
+          Modify memory_recall() in-place. Keep backward compatibility by using
+          max_depth=1 as default. Build GraphExpansionConfig from parameters,
+          call _expand_related_memories(), and populate RecallResult.expanded_memories.
+        key_points:
+          - point: "memory_recall() signature with new parameters"
+            details: "Add max_depth=1, max_expanded=20, decay_factor=0.7, include_edge_types, exclude_edge_types"
+            reference: "src/recall/memory/operations.py"
+          - point: "GraphExpansionConfig creation from parameters"
+            details: "Build config object when include_related=True"
+            reference: "src/recall/memory/operations.py"
+          - point: "Replace inline expansion with _expand_related_memories() call"
+            details: "Remove lines 253-301, call _expand_related_memories(store, memories, scores_dict, config, min_importance)"
+            reference: "src/recall/memory/operations.py"
+          - point: "RecallResult.expanded_memories population"
+            details: "Set expanded_memories field from _expand_related_memories() result"
+            reference: "src/recall/memory/operations.py"
+          - point: "backward compatibility with max_depth=1"
+            details: "Default parameters preserve existing single-hop behavior"
+            reference: "src/recall/memory/operations.py"
+        integration:
+          imports:
+            - "recall.memory.types.GraphExpansionConfig"
+            - "recall.memory.operations._expand_related_memories"
+
+      verification:
+        automated_tests:
+          command: "uv run pytest tests/unit/test_memory_operations.py -v -k recall"
+          expected_output: "Tests pass"
+
+      code_quality:
+        python:
+          full_quality_pipeline:
+            command: |
+              uv run python -m py_compile src/recall/memory/operations.py && uv run pytest tests/unit/test_memory_operations.py -v -k recall
+            exit_on_failure: true
+
+      commit:
+        type: "feat"
+        message: "integrate multi-hop graph expansion into memory_recall with configurable depth and scoring"
+        files:
+          - "src/recall/memory/operations.py"
+
+    # ═══════════════════════════════════════════════════════════════
+    # TASK 4: MCP Tool Handler
+    # ═══════════════════════════════════════════════════════════════
+    - task_number: "4"
+      name: "Update memory_recall_tool MCP handler"
+      agent: "python-pro"
+      files:
+        - "src/recall/__main__.py"
+      depends_on: [3]
+      estimated_time: "25m"
+
+      success_criteria:
+        - "memory_recall_tool() function signature updated with new parameters: max_depth (int, default=1), max_expanded (int, default=20), decay_factor (float, default=0.7), include_edge_types (Optional[list[str]]), exclude_edge_types (Optional[list[str]])."
+        - "memory_recall_tool() passes new parameters to memory_recall() call."
+        - "memory_recall_tool() response dict includes 'expanded' key with list of expanded memory dicts."
+        - "Each expanded memory dict includes: id, content, type, relevance_score, hop_distance, path, explanation."
+        - "memory_recall_tool() docstring updated to document new parameters and response format."
+        - "No TODO comments in production code paths."
+        - "No placeholder empty structs."
+        - "No unused variables."
+        - "All imports from dependency tasks resolve."
+
+      test_commands:
+        - "uv run python -c \"from recall.__main__ import memory_recall_tool; import inspect; sig = inspect.signature(memory_recall_tool); assert 'max_depth' in sig.parameters; print('Signature OK')\""
+        - "uv run pytest tests/integration/test_mcp_server.py -v -k recall"
+
+      description: |
+        ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
+        ```bash
+        # Verify Task 3 completed - memory_recall has new params
+        uv run python -c "from recall.memory.operations import memory_recall; import inspect; sig = inspect.signature(memory_recall); assert 'max_depth' in sig.parameters"
+
+        # Verify memory_recall_tool location
+        grep -n "async def memory_recall_tool" src/recall/__main__.py
+        ```
+
+        ## TASK DESCRIPTION
+        Update memory_recall_tool MCP handler:
+        1. Add new parameters to function signature
+        2. Pass parameters to memory_recall() call
+        3. Include expanded memories in response dict
+        4. Update docstring
+
+      implementation:
+        approach: |
+          Update the MCP tool handler to expose new parameters.
+          Transform expanded_memories (list[ExpandedMemory]) to response dicts.
+          Include relevance_score, hop_distance, and path in each expanded memory.
+        key_points:
+          - point: "memory_recall_tool() signature with new parameters"
+            details: "Add max_depth, max_expanded, decay_factor, include_edge_types, exclude_edge_types"
+            reference: "src/recall/__main__.py"
+          - point: "pass new parameters to memory_recall()"
+            details: "Forward all new params in the memory_recall() call"
+            reference: "src/recall/__main__.py"
+          - point: "response dict includes 'expanded' key"
+            details: "List of dicts with id, content, type, relevance_score, hop_distance, path, explanation"
+            reference: "src/recall/__main__.py"
+          - point: "docstring with new parameters and response format"
+            details: "Document all new parameters and the expanded response structure"
+            reference: "src/recall/__main__.py"
+        integration:
+          imports:
+            - "recall.memory.operations.memory_recall"
+
+      verification:
+        automated_tests:
+          command: "uv run pytest tests/integration/test_mcp_server.py -v -k recall"
+          expected_output: "Tests pass"
+
+      code_quality:
+        python:
+          full_quality_pipeline:
+            command: |
+              uv run python -m py_compile src/recall/__main__.py && uv run pytest tests/integration/test_mcp_server.py -v -k recall
+            exit_on_failure: true
+
+      commit:
+        type: "feat"
+        message: "expose graph expansion parameters in memory_recall_tool MCP handler"
+        files:
+          - "src/recall/__main__.py"
+
+    # ═══════════════════════════════════════════════════════════════
+    # TASK 5: Comprehensive Tests
+    # ═══════════════════════════════════════════════════════════════
+    - task_number: "5"
+      name: "Add comprehensive graph expansion tests"
+      agent: "test-automator"
+      files:
+        - "tests/unit/test_memory_operations.py"
+        - "tests/unit/test_memory_types.py"
+      depends_on: [1, 2, 3]
+      estimated_time: "40m"
+
+      success_criteria:
+        - "TestExpandedMemory class tests ExpandedMemory dataclass instantiation and field access including explanation field."
+        - "TestGraphExpansionConfig class tests default values and __post_init__ edge_type_weights."
+        - "TestGraphExpansionConfig class tests max_nodes_visited and max_edges_per_node safety guard defaults."
+        - "TestMultiHopGraphExpansion class tests depth=2 finds memories 2 hops away."
+        - "TestMultiHopGraphExpansion class tests cycle detection prevents infinite loops."
+        - "TestMultiHopGraphExpansion class tests max_depth is respected (no deeper traversal)."
+        - "TestRelevanceScoring class tests decay_factor is applied per hop."
+        - "TestRelevanceScoring class tests edge_weight affects relevance_score."
+        - "TestRelevanceScoring class tests geometric mean of edge_type_weights across path (not just final edge)."
+        - "TestEdgeTypeFiltering class tests include_edge_types filters correctly."
+        - "TestEdgeTypeFiltering class tests exclude_edge_types filters correctly."
+        - "TestExpansionLimits class tests max_expanded stops expansion."
+        - "TestExpansionLimits class tests max_nodes_visited safety guard stops BFS."
+        - "TestExpansionLimits class tests max_edges_per_node safety guard limits fan-out."
+        - "TestExplanationField class tests explanation string format matches expected pattern."
+        - "TestBackwardCompatibility class tests max_depth=1 produces same behavior as before."
+        - "All tests use pytest-asyncio for async test functions."
+        - "No TODO comments in production code paths."
+        - "No placeholder empty structs."
+        - "No unused variables."
+
+      test_commands:
+        - "uv run pytest tests/unit/test_memory_types.py -v -k 'Expanded or Config'"
+        - "uv run pytest tests/unit/test_memory_operations.py -v -k 'MultiHop or Relevance or EdgeType or Limit or Backward'"
+
+      description: |
+        ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
+        ```bash
+        # Verify all previous tasks completed
+        uv run python -c "from recall.memory.types import ExpandedMemory, GraphExpansionConfig"
+        uv run python -c "from recall.memory.operations import _expand_related_memories, memory_recall"
+
+        # Verify test file location
+        ls tests/unit/test_memory_operations.py tests/unit/test_memory_types.py
+        ```
+
+        ## TASK DESCRIPTION
+        Add comprehensive test coverage for graph expansion:
+        1. Unit tests for new dataclasses in test_memory_types.py
+        2. Unit tests for _expand_related_memories() behavior in test_memory_operations.py
+        3. Integration tests for memory_recall() with new parameters
+
+        ## TEST CLASSES TO ADD
+
+        In test_memory_types.py:
+        - TestExpandedMemory (including explanation field)
+        - TestGraphExpansionConfig (including safety guards)
+
+        In test_memory_operations.py:
+        - TestMultiHopGraphExpansion
+        - TestRelevanceScoring (geometric mean formula)
+        - TestEdgeTypeFiltering
+        - TestExpansionLimits (including safety guards)
+        - TestExplanationField
+        - TestBackwardCompatibility
+
+      implementation:
+        approach: |
+          Use pytest-asyncio for async tests. Create mock HybridStore with
+          get_edges() returning configurable edge data. Test scoring formula
+          with known values. Test filtering with specific edge types.
+        key_points:
+          - point: "TestExpandedMemory dataclass tests with explanation field"
+            details: "Test instantiation, field access, default values, explanation string"
+            reference: "tests/unit/test_memory_types.py"
+          - point: "TestGraphExpansionConfig default values and safety guards"
+            details: "Test __post_init__ sets edge_type_weights, max_nodes_visited=200, max_edges_per_node=10"
+            reference: "tests/unit/test_memory_types.py"
+          - point: "TestMultiHopGraphExpansion with depth=2"
+            details: "Create graph A->B->C, verify C found with depth=2"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "cycle detection test"
+            details: "Create A->B->A cycle, verify no infinite loop"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "TestRelevanceScoring with geometric mean formula"
+            details: "Test geometric_mean([0.9, 0.7]) = 0.79, not just final edge weight"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "TestEdgeTypeFiltering include/exclude"
+            details: "Test include_edge_types=['supersedes'] only follows supersedes"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "TestExpansionLimits safety guards"
+            details: "Test max_nodes_visited and max_edges_per_node stop expansion early"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "TestExplanationField format verification"
+            details: "Verify explanation matches '2 hops via supersedes → relates_to, combined weight 0.42'"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "TestBackwardCompatibility max_depth=1"
+            details: "Verify same results as original single-hop expansion"
+            reference: "tests/unit/test_memory_operations.py"
+        integration: {}
+
+      verification:
+        automated_tests:
+          command: "uv run pytest tests/unit/test_memory_types.py tests/unit/test_memory_operations.py -v"
+          expected_output: "Tests pass"
+
+      code_quality:
+        python:
+          full_quality_pipeline:
+            command: |
+              uv run pytest tests/unit/test_memory_types.py tests/unit/test_memory_operations.py -v --tb=short
+            exit_on_failure: true
+
+      commit:
+        type: "test"
+        message: "add comprehensive tests for multi-hop graph expansion"
+        files:
+          - "tests/unit/test_memory_operations.py"
+          - "tests/unit/test_memory_types.py"
