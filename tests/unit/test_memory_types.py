@@ -580,11 +580,11 @@ class TestGraphNode:
         assert node.importance == 0.7
 
     def test_graph_node_content_truncation(self):
-        """Content longer than 100 chars should be truncated with ellipsis."""
+        """Content longer than 150 chars should be truncated with ellipsis."""
         from recall.memory.types import GraphNode
 
-        # Create memory with 150-char content
-        long_content = "A" * 150
+        # Create memory with 200-char content (exceeds 150 limit)
+        long_content = "A" * 200
         memory = Memory(
             id="long-content-id",
             content=long_content,
@@ -595,9 +595,9 @@ class TestGraphNode:
         )
 
         node = GraphNode.from_memory(memory)
-        assert len(node.content_preview) == 100  # 97 chars + "..."
+        assert len(node.content_preview) == 150  # 147 chars + "..."
         assert node.content_preview.endswith("...")
-        assert node.content_preview[:97] == long_content[:97]
+        assert node.content_preview[:147] == long_content[:147]
 
     def test_graph_node_content_exactly_100(self):
         """Content exactly 100 chars should not be truncated."""
@@ -876,12 +876,12 @@ class TestGraphInspectionResult:
         assert '"quotes"' not in mermaid
         assert "'quotes'" in mermaid
 
-    def test_graph_inspection_result_to_mermaid_truncates_long_labels(self):
-        """to_mermaid should truncate labels longer than 50 chars."""
+    def test_graph_inspection_result_to_mermaid_auto_adjusts_labels(self):
+        """to_mermaid should auto-adjust label length based on node count."""
         from recall.memory.types import GraphInspectionResult, GraphNode
 
-        # Content is 60 chars
-        long_content = "A" * 60
+        # Single node - should allow up to 150 chars
+        long_content = "A" * 150
         node = GraphNode(
             id="long-node",
             content_preview=long_content,
@@ -897,5 +897,31 @@ class TestGraphInspectionResult:
         )
 
         mermaid = result.to_mermaid()
-        # Should have truncated to 47 chars + "..."
-        assert "A" * 47 + "..." in mermaid
+        # With 1 node, max_label_len=150, so full content should appear
+        assert "A" * 150 in mermaid
+
+    def test_graph_inspection_result_to_mermaid_truncates_large_graphs(self):
+        """to_mermaid should truncate more aggressively for larger graphs."""
+        from recall.memory.types import GraphInspectionResult, GraphNode
+
+        # Create 20 nodes (max_label_len=40)
+        nodes = []
+        for i in range(20):
+            nodes.append(GraphNode(
+                id=f"node-{i}",
+                content_preview="B" * 60,  # 60 chars, will be truncated to 40
+                memory_type="session",
+                confidence=0.4,
+                importance=0.3,
+            ))
+
+        result = GraphInspectionResult(
+            success=True,
+            origin_id="node-0",
+            nodes=nodes,
+        )
+
+        mermaid = result.to_mermaid()
+        # With 20 nodes, max_label_len=40, so should truncate to 37 + "..."
+        assert "B" * 37 + "..." in mermaid
+        assert "B" * 60 not in mermaid

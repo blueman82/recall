@@ -259,7 +259,7 @@ class GraphNode:
 
     Attributes:
         id: Memory ID
-        content_preview: Truncated content (max 100 chars, ellipsis if truncated)
+        content_preview: Truncated content (max 150 chars, auto-adjusted in Mermaid)
         memory_type: Memory type as string
         confidence: Confidence score
         importance: Importance score (0.0 to 1.0)
@@ -279,11 +279,12 @@ class GraphNode:
             hop_distance: Number of hops from origin (unused, kept for compatibility)
 
         Returns:
-            GraphNode with truncated content preview
+            GraphNode with truncated content preview (max 150 chars for small graphs)
         """
         content = memory.content
-        if len(content) > 100:
-            content_preview = content[:97] + "..."
+        # Store up to 150 chars - Mermaid will auto-adjust based on graph size
+        if len(content) > 150:
+            content_preview = content[:147] + "..."
         else:
             content_preview = content
         return cls(
@@ -407,13 +408,25 @@ class GraphInspectionResult:
 
         lines = ["flowchart TD"]
 
+        # Auto-adjust label length based on node count
+        # Fewer nodes = longer labels allowed for readability
+        node_count = len(self.nodes)
+        if node_count <= 3:
+            max_label_len = 150  # Show most content for small graphs
+        elif node_count <= 8:
+            max_label_len = 100  # Medium graphs
+        elif node_count <= 15:
+            max_label_len = 60   # Larger graphs
+        else:
+            max_label_len = 40   # Very large graphs need compact labels
+
         # Add nodes as rounded rectangles with content preview
         for node in self.nodes:
             # Escape special characters in content preview
             label = node.content_preview.replace('"', "'").replace("\n", " ")
-            # Truncate label further for mermaid display
-            if len(label) > 50:
-                label = label[:47] + "..."
+            # Auto-truncate based on graph size
+            if len(label) > max_label_len:
+                label = label[:max_label_len - 3] + "..."
             lines.append(f'    {node.id}["{label}"]')
 
         # Add edges with relationship type labels
