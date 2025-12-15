@@ -35,6 +35,7 @@ from mcp.server.fastmcp import FastMCP
 from recall.config import RecallSettings
 from recall.memory.operations import (
     ForgetResult,
+    inspect_graph,
     memory_apply,
     memory_context,
     memory_forget,
@@ -398,6 +399,145 @@ async def memory_recall_tool(
 
     except Exception as e:
         logger.error(f"memory_recall_tool failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
+# MCP Tool Handlers - Graph Inspection
+# =============================================================================
+
+
+@mcp.tool()
+async def memory_inspect_graph_tool(
+    memory_id: str,
+    max_depth: int = 2,
+    direction: str = "both",
+    edge_types: Optional[list[str]] = None,
+    include_scores: bool = True,
+    decay_factor: float = 0.7,
+    output_format: str = "json",
+) -> dict[str, Any]:
+    """Inspect the graph structure around a memory node.
+
+    Performs read-only breadth-first search from the origin memory, collecting
+    all nodes and edges within max_depth hops. Returns structured data for
+    visualization including Mermaid diagram generation.
+
+    Args:
+        memory_id: ID of the memory to start inspection from
+        max_depth: Maximum number of hops to traverse (default: 2)
+        direction: Edge traversal direction - "outgoing", "incoming", or "both" (default: "both")
+        edge_types: Optional list of edge types to include (None means all).
+            Valid types: relates_to, supersedes, caused_by, contradicts
+        include_scores: If True, compute relevance scores for paths (default: True)
+        decay_factor: Factor by which relevance decays per hop (default: 0.7)
+        output_format: Output format - "json" or "mermaid" (default: "json")
+
+    Returns:
+        Dictionary with:
+        - success: Boolean indicating operation success
+        - origin_id: The starting memory ID
+        - nodes: List of node dicts with id, content_preview, type, confidence, importance
+        - edges: List of edge dicts with id, source_id, target_id, edge_type, weight
+        - paths: List of path dicts with node_ids, edge_types, total_weight, relevance_score
+        - stats: Dict with node_count, edge_count, max_depth_reached, origin_id
+        - mermaid: Mermaid diagram string (only when output_format='mermaid')
+        - error: Error message (if failed)
+    """
+    if hybrid_store is None:
+        return {"success": False, "error": "Server not initialized"}
+
+    # Validate direction parameter
+    if direction not in ("outgoing", "incoming", "both"):
+        return {
+            "success": False,
+            "error": f"Invalid direction: {direction}. Must be one of: outgoing, incoming, both",
+        }
+
+    # Validate output_format parameter
+    if output_format not in ("json", "mermaid"):
+        return {
+            "success": False,
+            "error": f"Invalid output_format: {output_format}. Must be one of: json, mermaid",
+        }
+
+    try:
+        result = await inspect_graph(
+            store=hybrid_store,
+            memory_id=memory_id,
+            max_depth=max_depth,
+            direction=direction,
+            edge_types=edge_types,
+            include_scores=include_scores,
+            decay_factor=decay_factor,
+        )
+
+        if not result.success:
+            return {
+                "success": False,
+                "error": result.error or f"Memory not found: {memory_id}",
+            }
+
+        # Format response based on output_format
+        if output_format == "mermaid":
+            return {
+                "success": True,
+                "origin_id": result.origin_id,
+                "mermaid": result.to_mermaid(),
+                "stats": {
+                    "node_count": result.stats.node_count,
+                    "edge_count": result.stats.edge_count,
+                    "max_depth_reached": result.stats.max_depth_reached,
+                    "origin_id": result.stats.origin_id,
+                },
+            }
+
+        # JSON format - convert dataclasses to dicts
+        nodes_data = []
+        for node in result.nodes:
+            nodes_data.append({
+                "id": node.id,
+                "content_preview": node.content_preview,
+                "type": node.memory_type,
+                "confidence": node.confidence,
+                "importance": node.importance,
+            })
+
+        edges_data = []
+        for edge in result.edges:
+            edges_data.append({
+                "id": edge.id,
+                "source_id": edge.source_id,
+                "target_id": edge.target_id,
+                "edge_type": edge.edge_type,
+                "weight": edge.weight,
+            })
+
+        paths_data = []
+        for path in result.paths:
+            paths_data.append({
+                "node_ids": path.node_ids,
+                "edge_types": path.edge_types,
+                "total_weight": path.total_weight,
+                "relevance_score": path.relevance_score,
+            })
+
+        return {
+            "success": True,
+            "origin_id": result.origin_id,
+            "nodes": nodes_data,
+            "edges": edges_data,
+            "paths": paths_data,
+            "stats": {
+                "node_count": result.stats.node_count,
+                "edge_count": result.stats.edge_count,
+                "max_depth_reached": result.stats.max_depth_reached,
+                "origin_id": result.stats.origin_id,
+            },
+        }
+
+    except Exception as e:
+        logger.error(f"memory_inspect_graph_tool failed: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
 
 
@@ -1117,6 +1257,7 @@ async def call_tool_directly(
     tool_handlers = {
         "memory_store": memory_store_tool,
         "memory_recall": memory_recall_tool,
+        "memory_inspect_graph": memory_inspect_graph_tool,
         "memory_relate": memory_relate_tool,
         "memory_context": memory_context_tool,
         "memory_forget": memory_forget_tool,

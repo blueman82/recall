@@ -534,3 +534,368 @@ class TestGraphExpansionConfig:
         # Note: The current implementation mutates the merged dict,
         # but original is not affected because we create a new dict
         assert original_weights == original_copy or "caused_by" not in original_weights
+
+
+class TestGraphNode:
+    """Tests for GraphNode dataclass."""
+
+    @pytest.fixture
+    def sample_memory(self):
+        """Create a sample Memory for testing."""
+        return Memory(
+            id="test-node-id",
+            content="Test node content for graph visualization",
+            content_hash="abc123",
+            type=MemoryType.PREFERENCE,
+            importance=0.7,
+            confidence=0.8,
+        )
+
+    def test_graph_node_creation(self):
+        """Should create GraphNode with required fields."""
+        from recall.memory.types import GraphNode
+
+        node = GraphNode(
+            id="node-1",
+            content_preview="Short content",
+            memory_type="preference",
+            confidence=0.8,
+            importance=0.7,
+        )
+        assert node.id == "node-1"
+        assert node.content_preview == "Short content"
+        assert node.memory_type == "preference"
+        assert node.confidence == 0.8
+        assert node.importance == 0.7
+
+    def test_graph_node_from_memory(self, sample_memory):
+        """Should create GraphNode from Memory object."""
+        from recall.memory.types import GraphNode
+
+        node = GraphNode.from_memory(sample_memory)
+        assert node.id == "test-node-id"
+        assert node.content_preview == "Test node content for graph visualization"
+        assert node.memory_type == "preference"
+        assert node.confidence == 0.8
+        assert node.importance == 0.7
+
+    def test_graph_node_content_truncation(self):
+        """Content longer than 100 chars should be truncated with ellipsis."""
+        from recall.memory.types import GraphNode
+
+        # Create memory with 150-char content
+        long_content = "A" * 150
+        memory = Memory(
+            id="long-content-id",
+            content=long_content,
+            content_hash="longcontent123",
+            type=MemoryType.DECISION,
+            importance=0.5,
+            confidence=0.3,
+        )
+
+        node = GraphNode.from_memory(memory)
+        assert len(node.content_preview) == 100  # 97 chars + "..."
+        assert node.content_preview.endswith("...")
+        assert node.content_preview[:97] == long_content[:97]
+
+    def test_graph_node_content_exactly_100(self):
+        """Content exactly 100 chars should not be truncated."""
+        from recall.memory.types import GraphNode
+
+        exact_content = "B" * 100
+        memory = Memory(
+            id="exact-id",
+            content=exact_content,
+            content_hash="exact123",
+            type=MemoryType.PATTERN,
+            importance=0.6,
+            confidence=0.5,
+        )
+
+        node = GraphNode.from_memory(memory)
+        assert node.content_preview == exact_content
+        assert len(node.content_preview) == 100
+
+    def test_graph_node_short_content_unchanged(self, sample_memory):
+        """Content shorter than 100 chars should remain unchanged."""
+        from recall.memory.types import GraphNode
+
+        node = GraphNode.from_memory(sample_memory)
+        assert node.content_preview == sample_memory.content
+
+
+class TestGraphEdge:
+    """Tests for GraphEdge dataclass."""
+
+    def test_graph_edge_creation(self):
+        """Should create GraphEdge with required fields."""
+        from recall.memory.types import GraphEdge
+
+        edge = GraphEdge(
+            id=1,
+            source_id="node-a",
+            target_id="node-b",
+            edge_type="relates_to",
+            weight=0.8,
+        )
+        assert edge.id == 1
+        assert edge.source_id == "node-a"
+        assert edge.target_id == "node-b"
+        assert edge.edge_type == "relates_to"
+        assert edge.weight == 0.8
+
+    def test_graph_edge_from_edge(self):
+        """Should create GraphEdge from Edge object."""
+        from recall.memory.types import GraphEdge
+
+        edge = Edge(
+            source_id="mem-1",
+            target_id="mem-2",
+            relation=RelationType.SUPERSEDES,
+            weight=0.9,
+        )
+
+        graph_edge = GraphEdge.from_edge(edge, edge_id=42)
+        assert graph_edge.id == 42
+        assert graph_edge.source_id == "mem-1"
+        assert graph_edge.target_id == "mem-2"
+        assert graph_edge.edge_type == "supersedes"
+        assert graph_edge.weight == 0.9
+
+    def test_graph_edge_from_edge_all_relation_types(self):
+        """Should work with all RelationType values."""
+        from recall.memory.types import GraphEdge
+
+        for idx, rel_type in enumerate(RelationType):
+            edge = Edge(
+                source_id="src",
+                target_id="tgt",
+                relation=rel_type,
+            )
+            graph_edge = GraphEdge.from_edge(edge, edge_id=idx)
+            assert graph_edge.edge_type == rel_type.value
+
+
+class TestGraphPath:
+    """Tests for GraphPath dataclass."""
+
+    def test_graph_path_creation(self):
+        """Should create GraphPath with required fields."""
+        from recall.memory.types import GraphPath
+
+        path = GraphPath(
+            node_ids=["node-a", "node-b", "node-c"],
+            edge_types=["relates_to", "supersedes"],
+            total_weight=0.72,
+            relevance_score=0.65,
+        )
+        assert path.node_ids == ["node-a", "node-b", "node-c"]
+        assert path.edge_types == ["relates_to", "supersedes"]
+        assert path.total_weight == 0.72
+        assert path.relevance_score == 0.65
+
+    def test_graph_path_empty_lists(self):
+        """Should handle empty lists for origin-only paths."""
+        from recall.memory.types import GraphPath
+
+        path = GraphPath(
+            node_ids=["origin"],
+            edge_types=[],
+            total_weight=1.0,
+            relevance_score=1.0,
+        )
+        assert len(path.node_ids) == 1
+        assert len(path.edge_types) == 0
+
+    def test_graph_path_single_hop(self):
+        """Should represent single hop correctly."""
+        from recall.memory.types import GraphPath
+
+        path = GraphPath(
+            node_ids=["origin", "target"],
+            edge_types=["caused_by"],
+            total_weight=1.0,
+            relevance_score=0.7,
+        )
+        assert len(path.node_ids) == 2
+        assert len(path.edge_types) == 1
+
+
+class TestGraphStats:
+    """Tests for GraphStats dataclass."""
+
+    def test_graph_stats_creation(self):
+        """Should create GraphStats with required fields."""
+        from recall.memory.types import GraphStats
+
+        stats = GraphStats(
+            node_count=10,
+            edge_count=15,
+            max_depth_reached=2,
+            origin_id="mem-origin",
+        )
+        assert stats.node_count == 10
+        assert stats.edge_count == 15
+        assert stats.max_depth_reached == 2
+        assert stats.origin_id == "mem-origin"
+
+    def test_graph_stats_zero_values(self):
+        """Should handle zero values for empty graph."""
+        from recall.memory.types import GraphStats
+
+        stats = GraphStats(
+            node_count=1,
+            edge_count=0,
+            max_depth_reached=0,
+            origin_id="lonely-node",
+        )
+        assert stats.node_count == 1
+        assert stats.edge_count == 0
+        assert stats.max_depth_reached == 0
+
+
+class TestGraphInspectionResult:
+    """Tests for GraphInspectionResult dataclass."""
+
+    def test_graph_inspection_result_success(self):
+        """Should create successful GraphInspectionResult."""
+        from recall.memory.types import GraphInspectionResult, GraphStats
+
+        stats = GraphStats(
+            node_count=3,
+            edge_count=2,
+            max_depth_reached=1,
+            origin_id="origin-id",
+        )
+        result = GraphInspectionResult(
+            success=True,
+            origin_id="origin-id",
+            nodes=[],
+            edges=[],
+            paths=[],
+            stats=stats,
+        )
+        assert result.success is True
+        assert result.origin_id == "origin-id"
+        assert result.error is None
+
+    def test_graph_inspection_result_failure(self):
+        """Should create failed GraphInspectionResult with error."""
+        from recall.memory.types import GraphInspectionResult
+
+        result = GraphInspectionResult(
+            success=False,
+            error="Memory not found",
+        )
+        assert result.success is False
+        assert result.error == "Memory not found"
+
+    def test_graph_inspection_result_default_values(self):
+        """Should have correct default values."""
+        from recall.memory.types import GraphInspectionResult
+
+        result = GraphInspectionResult(success=True)
+        assert result.origin_id == ""
+        assert result.nodes == []
+        assert result.edges == []
+        assert result.paths == []
+        assert result.stats is None
+        assert result.error is None
+
+    def test_graph_inspection_result_to_mermaid_empty(self):
+        """to_mermaid should handle empty nodes."""
+        from recall.memory.types import GraphInspectionResult
+
+        result = GraphInspectionResult(success=True, nodes=[])
+        mermaid = result.to_mermaid()
+        assert "flowchart TD" in mermaid
+        assert "No nodes found" in mermaid
+
+    def test_graph_inspection_result_to_mermaid_basic(self):
+        """to_mermaid should generate valid Mermaid syntax."""
+        from recall.memory.types import GraphInspectionResult, GraphNode, GraphEdge
+
+        node1 = GraphNode(
+            id="node-1",
+            content_preview="First node content",
+            memory_type="preference",
+            confidence=0.8,
+            importance=0.7,
+        )
+        node2 = GraphNode(
+            id="node-2",
+            content_preview="Second node content",
+            memory_type="decision",
+            confidence=0.6,
+            importance=0.5,
+        )
+        edge = GraphEdge(
+            id=1,
+            source_id="node-1",
+            target_id="node-2",
+            edge_type="relates_to",
+            weight=1.0,
+        )
+
+        result = GraphInspectionResult(
+            success=True,
+            origin_id="node-1",
+            nodes=[node1, node2],
+            edges=[edge],
+        )
+
+        mermaid = result.to_mermaid()
+
+        # Verify Mermaid structure
+        assert mermaid.startswith("flowchart TD")
+        assert 'node-1["First node content"]' in mermaid
+        assert 'node-2["Second node content"]' in mermaid
+        assert "node-1 -->|relates_to| node-2" in mermaid
+
+    def test_graph_inspection_result_to_mermaid_escapes_quotes(self):
+        """to_mermaid should escape quotes in content."""
+        from recall.memory.types import GraphInspectionResult, GraphNode
+
+        node = GraphNode(
+            id="quote-node",
+            content_preview='Content with "quotes" inside',
+            memory_type="pattern",
+            confidence=0.5,
+            importance=0.5,
+        )
+
+        result = GraphInspectionResult(
+            success=True,
+            origin_id="quote-node",
+            nodes=[node],
+        )
+
+        mermaid = result.to_mermaid()
+        # Quotes should be replaced with single quotes
+        assert '"quotes"' not in mermaid
+        assert "'quotes'" in mermaid
+
+    def test_graph_inspection_result_to_mermaid_truncates_long_labels(self):
+        """to_mermaid should truncate labels longer than 50 chars."""
+        from recall.memory.types import GraphInspectionResult, GraphNode
+
+        # Content is 60 chars
+        long_content = "A" * 60
+        node = GraphNode(
+            id="long-node",
+            content_preview=long_content,
+            memory_type="session",
+            confidence=0.4,
+            importance=0.3,
+        )
+
+        result = GraphInspectionResult(
+            success=True,
+            origin_id="long-node",
+            nodes=[node],
+        )
+
+        mermaid = result.to_mermaid()
+        # Should have truncated to 47 chars + "..."
+        assert "A" * 47 + "..." in mermaid

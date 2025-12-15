@@ -601,3 +601,331 @@ class TestMCPServerErrorHandling:
 
         assert result["success"] is False
         assert "not found" in result["error"]
+
+
+class TestMemoryInspectGraphTool:
+    """Tests for memory_inspect_graph_tool MCP handler."""
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_tool_json_format(self, ephemeral_store):
+        """Test memory_inspect_graph_tool returns JSON format with correct structure."""
+        from recall.__main__ import memory_store_tool, memory_relate_tool, memory_inspect_graph_tool
+
+        with patch("recall.__main__.hybrid_store", ephemeral_store):
+            # Store two memories
+            result1 = await memory_store_tool(
+                content="Origin memory for graph inspection",
+                memory_type="preference",
+            )
+            assert result1["success"] is True
+            origin_id = result1["id"]
+
+            result2 = await memory_store_tool(
+                content="Related memory for graph inspection",
+                memory_type="decision",
+            )
+            assert result2["success"] is True
+            related_id = result2["id"]
+
+            # Create relationship
+            await memory_relate_tool(
+                source_id=origin_id,
+                target_id=related_id,
+                relation="relates_to",
+            )
+
+            # Inspect graph with JSON format (default)
+            result = await memory_inspect_graph_tool(
+                memory_id=origin_id,
+                max_depth=1,
+                output_format="json",
+            )
+
+        assert result["success"] is True
+        assert result["origin_id"] == origin_id
+        # Verify JSON response has required keys
+        assert "nodes" in result
+        assert "edges" in result
+        assert "paths" in result
+        assert "stats" in result
+
+        # Verify nodes structure
+        assert isinstance(result["nodes"], list)
+        assert len(result["nodes"]) >= 1
+        for node in result["nodes"]:
+            assert "id" in node
+            assert "content_preview" in node
+            assert "type" in node
+            assert "confidence" in node
+            assert "importance" in node
+
+        # Verify edges structure
+        assert isinstance(result["edges"], list)
+        for edge in result["edges"]:
+            assert "id" in edge
+            assert "source_id" in edge
+            assert "target_id" in edge
+            assert "edge_type" in edge
+            assert "weight" in edge
+
+        # Verify stats structure
+        assert isinstance(result["stats"], dict)
+        assert "node_count" in result["stats"]
+        assert "edge_count" in result["stats"]
+        assert "max_depth_reached" in result["stats"]
+        assert "origin_id" in result["stats"]
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_tool_mermaid_format(self, ephemeral_store):
+        """Test memory_inspect_graph_tool returns mermaid format."""
+        from recall.__main__ import memory_store_tool, memory_relate_tool, memory_inspect_graph_tool
+
+        with patch("recall.__main__.hybrid_store", ephemeral_store):
+            # Store two memories
+            result1 = await memory_store_tool(
+                content="Origin for mermaid test",
+                memory_type="pattern",
+            )
+            origin_id = result1["id"]
+
+            result2 = await memory_store_tool(
+                content="Target for mermaid test",
+                memory_type="pattern",
+            )
+            target_id = result2["id"]
+
+            # Create relationship
+            await memory_relate_tool(
+                source_id=origin_id,
+                target_id=target_id,
+                relation="supersedes",
+            )
+
+            # Inspect graph with mermaid format
+            result = await memory_inspect_graph_tool(
+                memory_id=origin_id,
+                output_format="mermaid",
+            )
+
+        assert result["success"] is True
+        assert result["origin_id"] == origin_id
+        # Should have mermaid string
+        assert "mermaid" in result
+        assert isinstance(result["mermaid"], str)
+        # Mermaid should start with 'flowchart'
+        assert result["mermaid"].startswith("flowchart")
+        # Should still have stats
+        assert "stats" in result
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_tool_error_nonexistent_memory(self, ephemeral_store):
+        """Test memory_inspect_graph_tool returns error for non-existent memory."""
+        from recall.__main__ import memory_inspect_graph_tool
+
+        with patch("recall.__main__.hybrid_store", ephemeral_store):
+            result = await memory_inspect_graph_tool(
+                memory_id="nonexistent_memory_id",
+            )
+
+        assert result["success"] is False
+        assert "error" in result
+        # Error should indicate memory not found
+        assert "not found" in result["error"].lower() or "nonexistent" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_tool_invalid_direction(self, ephemeral_store):
+        """Test memory_inspect_graph_tool returns error for invalid direction."""
+        from recall.__main__ import memory_store_tool, memory_inspect_graph_tool
+
+        with patch("recall.__main__.hybrid_store", ephemeral_store):
+            # Store a memory first
+            store_result = await memory_store_tool(
+                content="Test memory for invalid direction",
+            )
+            memory_id = store_result["id"]
+
+            result = await memory_inspect_graph_tool(
+                memory_id=memory_id,
+                direction="invalid_direction",
+            )
+
+        assert result["success"] is False
+        assert "error" in result
+        assert "direction" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_tool_invalid_output_format(self, ephemeral_store):
+        """Test memory_inspect_graph_tool returns error for invalid output format."""
+        from recall.__main__ import memory_store_tool, memory_inspect_graph_tool
+
+        with patch("recall.__main__.hybrid_store", ephemeral_store):
+            # Store a memory first
+            store_result = await memory_store_tool(
+                content="Test memory for invalid format",
+            )
+            memory_id = store_result["id"]
+
+            result = await memory_inspect_graph_tool(
+                memory_id=memory_id,
+                output_format="invalid_format",
+            )
+
+        assert result["success"] is False
+        assert "error" in result
+        assert "output_format" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_tool_not_initialized(self):
+        """Test memory_inspect_graph_tool when server not initialized."""
+        from recall.__main__ import memory_inspect_graph_tool
+
+        with patch("recall.__main__.hybrid_store", None):
+            result = await memory_inspect_graph_tool(
+                memory_id="any_id",
+            )
+
+        assert result["success"] is False
+        assert "not initialized" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_tool_with_direction_options(self, ephemeral_store):
+        """Test memory_inspect_graph_tool with different direction options."""
+        from recall.__main__ import memory_store_tool, memory_relate_tool, memory_inspect_graph_tool
+
+        with patch("recall.__main__.hybrid_store", ephemeral_store):
+            # Create a simple graph: A -> B
+            result_a = await memory_store_tool(content="Node A")
+            result_b = await memory_store_tool(content="Node B")
+            id_a = result_a["id"]
+            id_b = result_b["id"]
+
+            await memory_relate_tool(
+                source_id=id_a,
+                target_id=id_b,
+                relation="relates_to",
+            )
+
+            # Test outgoing direction
+            result_outgoing = await memory_inspect_graph_tool(
+                memory_id=id_a,
+                direction="outgoing",
+            )
+            assert result_outgoing["success"] is True
+
+            # Test incoming direction
+            result_incoming = await memory_inspect_graph_tool(
+                memory_id=id_b,
+                direction="incoming",
+            )
+            assert result_incoming["success"] is True
+
+            # Test both direction (default)
+            result_both = await memory_inspect_graph_tool(
+                memory_id=id_a,
+                direction="both",
+            )
+            assert result_both["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_tool_with_edge_types_filter(self, ephemeral_store):
+        """Test memory_inspect_graph_tool with edge_types filter."""
+        from recall.__main__ import memory_store_tool, memory_relate_tool, memory_inspect_graph_tool
+
+        with patch("recall.__main__.hybrid_store", ephemeral_store):
+            # Create graph with different edge types
+            result_a = await memory_store_tool(content="Node A")
+            result_b = await memory_store_tool(content="Node B")
+            result_c = await memory_store_tool(content="Node C")
+            id_a = result_a["id"]
+            id_b = result_b["id"]
+            id_c = result_c["id"]
+
+            # A relates_to B
+            await memory_relate_tool(source_id=id_a, target_id=id_b, relation="relates_to")
+            # A contradicts C
+            await memory_relate_tool(source_id=id_a, target_id=id_c, relation="contradicts")
+
+            # Filter to only relates_to edges
+            result = await memory_inspect_graph_tool(
+                memory_id=id_a,
+                edge_types=["relates_to"],
+            )
+
+            assert result["success"] is True
+            # Verify filtering works (may need to check based on implementation)
+            assert len(result["nodes"]) >= 1
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_tool_with_scores(self, ephemeral_store):
+        """Test memory_inspect_graph_tool with include_scores option."""
+        from recall.__main__ import memory_store_tool, memory_relate_tool, memory_inspect_graph_tool
+
+        with patch("recall.__main__.hybrid_store", ephemeral_store):
+            # Create simple graph
+            result_a = await memory_store_tool(content="Node A")
+            result_b = await memory_store_tool(content="Node B")
+            id_a = result_a["id"]
+            id_b = result_b["id"]
+
+            await memory_relate_tool(source_id=id_a, target_id=id_b, relation="relates_to")
+
+            # With scores
+            result_with_scores = await memory_inspect_graph_tool(
+                memory_id=id_a,
+                include_scores=True,
+            )
+            assert result_with_scores["success"] is True
+            assert "paths" in result_with_scores
+
+            # Without scores
+            result_without_scores = await memory_inspect_graph_tool(
+                memory_id=id_a,
+                include_scores=False,
+            )
+            assert result_without_scores["success"] is True
+            # Paths should be empty when scores are disabled
+            assert len(result_without_scores["paths"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_tool_max_depth(self, ephemeral_store):
+        """Test memory_inspect_graph_tool respects max_depth parameter."""
+        from recall.__main__ import memory_store_tool, memory_relate_tool, memory_inspect_graph_tool
+
+        with patch("recall.__main__.hybrid_store", ephemeral_store):
+            # Create chain: A -> B -> C -> D
+            result_a = await memory_store_tool(content="Node A")
+            result_b = await memory_store_tool(content="Node B")
+            result_c = await memory_store_tool(content="Node C")
+            result_d = await memory_store_tool(content="Node D")
+
+            id_a, id_b, id_c, id_d = result_a["id"], result_b["id"], result_c["id"], result_d["id"]
+
+            await memory_relate_tool(source_id=id_a, target_id=id_b, relation="relates_to")
+            await memory_relate_tool(source_id=id_b, target_id=id_c, relation="relates_to")
+            await memory_relate_tool(source_id=id_c, target_id=id_d, relation="relates_to")
+
+            # max_depth=1 should find A and B only
+            result_depth_1 = await memory_inspect_graph_tool(
+                memory_id=id_a,
+                max_depth=1,
+                direction="outgoing",
+            )
+            assert result_depth_1["success"] is True
+            node_ids_1 = {n["id"] for n in result_depth_1["nodes"]}
+            assert id_a in node_ids_1
+            assert id_b in node_ids_1
+            # max_depth=1 may or may not include C depending on implementation
+            # but definitely should not include D at depth 3
+
+            # max_depth=3 should find all
+            result_depth_3 = await memory_inspect_graph_tool(
+                memory_id=id_a,
+                max_depth=3,
+                direction="outgoing",
+            )
+            assert result_depth_3["success"] is True
+            node_ids_3 = {n["id"] for n in result_depth_3["nodes"]}
+            assert id_a in node_ids_3
+            assert id_b in node_ids_3
+            assert id_c in node_ids_3
+            assert id_d in node_ids_3

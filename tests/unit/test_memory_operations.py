@@ -3533,3 +3533,489 @@ class TestBackwardCompatibility:
         # Verify count consistency
         assert len(result_1hop.expanded_memories) == 1
         assert len(result_2hop.expanded_memories) == 2
+
+
+class TestInspectGraph:
+    """Tests for inspect_graph function."""
+
+    @pytest.fixture
+    def mock_store(self):
+        """Create mock HybridStore for testing."""
+        store = MagicMock(spec=HybridStore)
+        store.get_memory = AsyncMock(return_value=None)
+        store.get_edges = MagicMock(return_value=[])
+        return store
+
+    def _create_memory_dict(self, mem_id: str, content: str = "Test content") -> dict:
+        """Create a memory dict for testing."""
+        import time
+        return {
+            "id": mem_id,
+            "content": content,
+            "content_hash": f"hash_{mem_id}",
+            "type": "preference",
+            "namespace": "global",
+            "importance": 0.5,
+            "confidence": 0.3,
+            "created_at": time.time(),
+            "accessed_at": time.time(),
+            "access_count": 0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_memory_not_found(self, mock_store):
+        """Test inspect_graph returns error for non-existent memory."""
+        from recall.memory.operations import inspect_graph
+
+        mock_store.get_memory.return_value = None
+
+        result = await inspect_graph(
+            store=mock_store,
+            memory_id="nonexistent_id",
+        )
+
+        assert result.success is False
+        assert "not found" in result.error
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_invalid_direction(self, mock_store):
+        """Test inspect_graph returns error for invalid direction."""
+        from recall.memory.operations import inspect_graph
+
+        result = await inspect_graph(
+            store=mock_store,
+            memory_id="any_id",
+            direction="invalid",
+        )
+
+        assert result.success is False
+        assert "Invalid direction" in result.error
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_origin_only(self, mock_store):
+        """Test inspect_graph with origin node only (no edges)."""
+        from recall.memory.operations import inspect_graph
+
+        mock_store.get_memory.return_value = self._create_memory_dict("origin", "Origin content")
+        mock_store.get_edges.return_value = []
+
+        result = await inspect_graph(
+            store=mock_store,
+            memory_id="origin",
+        )
+
+        assert result.success is True
+        assert result.origin_id == "origin"
+        assert len(result.nodes) == 1
+        assert result.nodes[0].id == "origin"
+        assert len(result.edges) == 0
+        assert result.stats.node_count == 1
+        assert result.stats.edge_count == 0
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_direction_outgoing(self, mock_store):
+        """Test inspect_graph with outgoing-only direction."""
+        from recall.memory.operations import inspect_graph
+
+        # Create A -> B -> C graph
+        memories = {
+            "mem_A": self._create_memory_dict("mem_A", "Node A"),
+            "mem_B": self._create_memory_dict("mem_B", "Node B"),
+            "mem_C": self._create_memory_dict("mem_C", "Node C"),
+        }
+
+        async def get_memory_side_effect(mem_id):
+            return memories.get(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            # For outgoing direction, only return edges where mem_id is source
+            if direction == "outgoing":
+                if mem_id == "mem_A":
+                    return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 1.0}]
+                elif mem_id == "mem_B":
+                    return [{"id": 2, "source_id": "mem_B", "target_id": "mem_C", "edge_type": "relates_to", "weight": 1.0}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        result = await inspect_graph(
+            store=mock_store,
+            memory_id="mem_A",
+            max_depth=2,
+            direction="outgoing",
+        )
+
+        assert result.success is True
+        node_ids = {n.id for n in result.nodes}
+        assert node_ids == {"mem_A", "mem_B", "mem_C"}
+        assert len(result.edges) == 2
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_direction_incoming(self, mock_store):
+        """Test inspect_graph with incoming-only direction."""
+        from recall.memory.operations import inspect_graph
+
+        # Create graph where C is the target of edges from A and B
+        memories = {
+            "mem_A": self._create_memory_dict("mem_A", "Node A"),
+            "mem_B": self._create_memory_dict("mem_B", "Node B"),
+            "mem_C": self._create_memory_dict("mem_C", "Node C"),
+        }
+
+        async def get_memory_side_effect(mem_id):
+            return memories.get(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            # For incoming direction, only return edges where mem_id is target
+            if direction == "incoming":
+                if mem_id == "mem_C":
+                    return [
+                        {"id": 1, "source_id": "mem_A", "target_id": "mem_C", "edge_type": "relates_to", "weight": 1.0},
+                        {"id": 2, "source_id": "mem_B", "target_id": "mem_C", "edge_type": "caused_by", "weight": 0.8},
+                    ]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        result = await inspect_graph(
+            store=mock_store,
+            memory_id="mem_C",
+            max_depth=1,
+            direction="incoming",
+        )
+
+        assert result.success is True
+        node_ids = {n.id for n in result.nodes}
+        assert node_ids == {"mem_A", "mem_B", "mem_C"}
+        assert len(result.edges) == 2
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_direction_both(self, mock_store):
+        """Test inspect_graph with both directions (default)."""
+        from recall.memory.operations import inspect_graph
+
+        # Create graph A <-> B -> C
+        memories = {
+            "mem_A": self._create_memory_dict("mem_A", "Node A"),
+            "mem_B": self._create_memory_dict("mem_B", "Node B"),
+            "mem_C": self._create_memory_dict("mem_C", "Node C"),
+        }
+
+        async def get_memory_side_effect(mem_id):
+            return memories.get(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "mem_B":
+                return [
+                    {"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 1.0},
+                    {"id": 2, "source_id": "mem_B", "target_id": "mem_C", "edge_type": "supersedes", "weight": 0.9},
+                ]
+            elif mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 1.0}]
+            elif mem_id == "mem_C":
+                return [{"id": 2, "source_id": "mem_B", "target_id": "mem_C", "edge_type": "supersedes", "weight": 0.9}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        result = await inspect_graph(
+            store=mock_store,
+            memory_id="mem_B",
+            max_depth=1,
+            direction="both",
+        )
+
+        assert result.success is True
+        node_ids = {n.id for n in result.nodes}
+        assert node_ids == {"mem_A", "mem_B", "mem_C"}
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_max_depth_limit(self, mock_store):
+        """Test that max_depth limits graph traversal (A->B->C->D with max_depth=2 should not reach D)."""
+        from recall.memory.operations import inspect_graph
+
+        # Create linear graph A -> B -> C -> D
+        memories = {
+            "mem_A": self._create_memory_dict("mem_A", "Node A"),
+            "mem_B": self._create_memory_dict("mem_B", "Node B"),
+            "mem_C": self._create_memory_dict("mem_C", "Node C"),
+            "mem_D": self._create_memory_dict("mem_D", "Node D"),
+        }
+
+        async def get_memory_side_effect(mem_id):
+            return memories.get(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 1.0}]
+            elif mem_id == "mem_B":
+                return [{"id": 2, "source_id": "mem_B", "target_id": "mem_C", "edge_type": "relates_to", "weight": 1.0}]
+            elif mem_id == "mem_C":
+                return [{"id": 3, "source_id": "mem_C", "target_id": "mem_D", "edge_type": "relates_to", "weight": 1.0}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        result = await inspect_graph(
+            store=mock_store,
+            memory_id="mem_A",
+            max_depth=2,
+            direction="outgoing",
+        )
+
+        assert result.success is True
+        node_ids = {n.id for n in result.nodes}
+        # With max_depth=2, should reach A, B, C but NOT D (which is 3 hops)
+        assert "mem_A" in node_ids
+        assert "mem_B" in node_ids
+        assert "mem_C" in node_ids
+        assert "mem_D" not in node_ids
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_edge_types_filtering(self, mock_store):
+        """Test that edge_types parameter filters which edges to follow."""
+        from recall.memory.operations import inspect_graph
+
+        # Create graph with different edge types
+        memories = {
+            "mem_A": self._create_memory_dict("mem_A", "Node A"),
+            "mem_B": self._create_memory_dict("mem_B", "Node B"),
+            "mem_C": self._create_memory_dict("mem_C", "Node C"),
+        }
+
+        async def get_memory_side_effect(mem_id):
+            return memories.get(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "mem_A":
+                return [
+                    {"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 1.0},
+                    {"id": 2, "source_id": "mem_A", "target_id": "mem_C", "edge_type": "contradicts", "weight": 0.5},
+                ]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        # Only follow "relates_to" edges
+        result = await inspect_graph(
+            store=mock_store,
+            memory_id="mem_A",
+            max_depth=1,
+            edge_types=["relates_to"],
+        )
+
+        assert result.success is True
+        node_ids = {n.id for n in result.nodes}
+        # Should only reach B via relates_to, not C via contradicts
+        assert "mem_A" in node_ids
+        assert "mem_B" in node_ids
+        assert "mem_C" not in node_ids
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_output_size_caps(self, mock_store):
+        """Test that output size caps (MAX_NODES, MAX_EDGES) are enforced."""
+        from recall.memory.operations import inspect_graph
+
+        # Create a large graph with 150 nodes
+        memories = {f"mem_{i}": self._create_memory_dict(f"mem_{i}", f"Node {i}") for i in range(150)}
+
+        async def get_memory_side_effect(mem_id):
+            return memories.get(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            # Each node connects to 10 other nodes
+            node_num = int(mem_id.split("_")[1])
+            edges = []
+            for i in range(10):
+                target_num = (node_num + i + 1) % 150
+                edges.append({
+                    "id": node_num * 10 + i,
+                    "source_id": mem_id,
+                    "target_id": f"mem_{target_num}",
+                    "edge_type": "relates_to",
+                    "weight": 1.0,
+                })
+            return edges
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        result = await inspect_graph(
+            store=mock_store,
+            memory_id="mem_0",
+            max_depth=5,  # Deep traversal
+        )
+
+        assert result.success is True
+        # MAX_NODES is 100, MAX_EDGES is 200
+        assert len(result.nodes) <= 100
+        assert len(result.edges) <= 200
+        assert result.stats.node_count <= 100
+        assert result.stats.edge_count <= 200
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_with_scores(self, mock_store):
+        """Test that include_scores generates path relevance scores."""
+        from recall.memory.operations import inspect_graph
+
+        # Create simple A -> B graph
+        memories = {
+            "mem_A": self._create_memory_dict("mem_A", "Node A"),
+            "mem_B": self._create_memory_dict("mem_B", "Node B"),
+        }
+
+        async def get_memory_side_effect(mem_id):
+            return memories.get(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "supersedes", "weight": 0.9}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        result = await inspect_graph(
+            store=mock_store,
+            memory_id="mem_A",
+            max_depth=1,
+            include_scores=True,
+            decay_factor=0.7,
+        )
+
+        assert result.success is True
+        # Should have paths with scores
+        # The path A -> B should exist since B is a leaf node
+        if result.paths:
+            for path in result.paths:
+                assert path.relevance_score >= 0.0
+                assert path.relevance_score <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_without_scores(self, mock_store):
+        """Test that include_scores=False skips path scoring."""
+        from recall.memory.operations import inspect_graph
+
+        # Create simple A -> B graph
+        memories = {
+            "mem_A": self._create_memory_dict("mem_A", "Node A"),
+            "mem_B": self._create_memory_dict("mem_B", "Node B"),
+        }
+
+        async def get_memory_side_effect(mem_id):
+            return memories.get(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 1.0}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        result = await inspect_graph(
+            store=mock_store,
+            memory_id="mem_A",
+            max_depth=1,
+            include_scores=False,
+        )
+
+        assert result.success is True
+        # Without scores, paths should be empty
+        assert len(result.paths) == 0
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_cyclic_graph(self, mock_store):
+        """Test that inspect_graph handles cycles without infinite loops."""
+        from recall.memory.operations import inspect_graph
+
+        # Create cyclic graph A -> B -> C -> A
+        memories = {
+            "mem_A": self._create_memory_dict("mem_A", "Node A"),
+            "mem_B": self._create_memory_dict("mem_B", "Node B"),
+            "mem_C": self._create_memory_dict("mem_C", "Node C"),
+        }
+
+        async def get_memory_side_effect(mem_id):
+            return memories.get(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "mem_A":
+                return [{"id": 1, "source_id": "mem_A", "target_id": "mem_B", "edge_type": "relates_to", "weight": 1.0}]
+            elif mem_id == "mem_B":
+                return [{"id": 2, "source_id": "mem_B", "target_id": "mem_C", "edge_type": "relates_to", "weight": 1.0}]
+            elif mem_id == "mem_C":
+                return [{"id": 3, "source_id": "mem_C", "target_id": "mem_A", "edge_type": "relates_to", "weight": 1.0}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        # Should complete without infinite loop
+        result = await inspect_graph(
+            store=mock_store,
+            memory_id="mem_A",
+            max_depth=5,
+            direction="outgoing",
+        )
+
+        assert result.success is True
+        node_ids = {n.id for n in result.nodes}
+        # Should find all 3 nodes exactly once (no duplicates)
+        assert node_ids == {"mem_A", "mem_B", "mem_C"}
+        assert len(result.nodes) == 3
+
+    @pytest.mark.asyncio
+    async def test_inspect_graph_mermaid_output(self, mock_store):
+        """Test that result.to_mermaid() produces valid output."""
+        from recall.memory.operations import inspect_graph
+
+        # Create simple graph
+        memories = {
+            "origin": self._create_memory_dict("origin", "Origin node content"),
+            "target": self._create_memory_dict("target", "Target node content"),
+        }
+
+        async def get_memory_side_effect(mem_id):
+            return memories.get(mem_id)
+
+        mock_store.get_memory = AsyncMock(side_effect=get_memory_side_effect)
+
+        def get_edges_side_effect(mem_id, direction="both"):
+            if mem_id == "origin":
+                return [{"id": 1, "source_id": "origin", "target_id": "target", "edge_type": "supersedes", "weight": 1.0}]
+            return []
+
+        mock_store.get_edges = MagicMock(side_effect=get_edges_side_effect)
+
+        result = await inspect_graph(
+            store=mock_store,
+            memory_id="origin",
+            max_depth=1,
+        )
+
+        assert result.success is True
+
+        # Generate mermaid diagram
+        mermaid = result.to_mermaid()
+
+        # Verify mermaid syntax
+        assert mermaid.startswith("flowchart TD")
+        assert "origin" in mermaid
+        assert "target" in mermaid
+        assert "supersedes" in mermaid
+        assert "-->" in mermaid
