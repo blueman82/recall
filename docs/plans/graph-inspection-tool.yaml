@@ -1,0 +1,485 @@
+# ═══════════════════════════════════════════════════════════════
+# DATA FLOW REGISTRY
+# ═══════════════════════════════════════════════════════════════
+# PRODUCERS:
+#   Task 1 → GraphNode, GraphEdge, GraphPath, GraphStats, GraphInspectionResult dataclasses
+#   Task 2 → inspect_graph() function
+#   Task 3 → memory_inspect_graph_tool MCP handler
+# CONSUMERS:
+#   Task 2 → [1] (needs GraphInspectionResult, GraphNode, GraphEdge, GraphPath, GraphStats)
+#   Task 3 → [2] (needs inspect_graph)
+#   Task 4 → [1, 2, 3] (tests all components)
+# EXTERNAL DEPENDENCIES:
+#   graph-expansion.yaml Task 1 → GraphExpansionConfig (for relevance scoring)
+#   graph-expansion.yaml Task 2 → _expand_related_memories() (reuse scoring logic)
+# VALIDATION: All consumers depend_on their producers ✓
+# ═══════════════════════════════════════════════════════════════
+# SUCCESS CRITERIA VALIDATION
+# ═══════════════════════════════════════════════════════════════
+# All criteria derived from key_points ✓
+# Same terminology in key_points and criteria ✓
+# Component tasks have CAPABILITY-only criteria ✓
+# Integration task (3) has MCP-level criteria ✓
+# ═══════════════════════════════════════════════════════════════
+
+conductor:
+  default_agent: python-pro
+  worktree_groups:
+    - group_id: "data-model"
+      description: "Data structures for graph inspection"
+      tasks: [1]
+      rationale: "Response dataclasses must exist first"
+    - group_id: "core-logic"
+      description: "Graph inspection implementation"
+      tasks: [2]
+      rationale: "Core traversal and inspection logic"
+    - group_id: "api-layer"
+      description: "MCP tool handler"
+      tasks: [3]
+      rationale: "Exposes inspection via MCP"
+    - group_id: "testing"
+      description: "Comprehensive test coverage"
+      tasks: [4]
+      rationale: "Validates all components"
+
+plan:
+  metadata:
+    feature_name: "Graph Inspection MCP Tool"
+    created: "2025-12-15"
+    target: "Read-only graph inspection tool for visualizing memory relationships"
+
+  context:
+    framework: "Python 3.13+ with MCP (FastMCP)"
+    architecture: "Layered: types → operations → MCP handlers"
+    test_framework: "pytest with pytest-asyncio"
+
+  prerequisites:
+    - file: "docs/plans/graph-expansion.yaml"
+      tasks: [1, 2]
+      reason: "GraphExpansionConfig and _expand_related_memories() provide relevance scoring infrastructure"
+
+  tasks:
+    # ═══════════════════════════════════════════════════════════════
+    # TASK 1: Data Structures
+    # ═══════════════════════════════════════════════════════════════
+    - task_number: "1"
+      name: "Add graph inspection data structures"
+      agent: "python-schema-architect"
+      files:
+        - "src/recall/memory/types.py"
+      depends_on: []
+      estimated_time: "20m"
+
+      success_criteria:
+        - "GraphNode dataclass exists with fields: id (str), content_preview (str, max 100 chars), memory_type (str), importance (float), confidence (float)."
+        - "GraphEdge dataclass exists with fields: id (int), source_id (str), target_id (str), edge_type (str), weight (float)."
+        - "GraphPath dataclass exists with fields: node_ids (list[str]), edge_types (list[str]), total_weight (float), relevance_score (float)."
+        - "GraphStats dataclass exists with fields: node_count (int), edge_count (int), max_depth_reached (int)."
+        - "GraphInspectionResult dataclass exists with fields: origin_id (str), nodes (list[GraphNode]), edges (list[GraphEdge]), paths (list[GraphPath]), stats (GraphStats)."
+        - "GraphInspectionResult.to_mermaid() method generates valid Mermaid flowchart syntax."
+        - "All new dataclasses have docstrings explaining their purpose."
+        - "No TODO comments in production code paths."
+        - "No placeholder empty structs."
+        - "No unused variables."
+
+      test_commands:
+        - "uv run python -c \"from recall.memory.types import GraphNode, GraphEdge, GraphPath, GraphStats, GraphInspectionResult; print('Import OK')\""
+        - "uv run pytest tests/unit/test_memory_types.py -v -k 'GraphNode or GraphEdge or GraphPath or GraphStats or GraphInspection'"
+
+      description: |
+        ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
+        ```bash
+        # Verify types.py exists and has ExpandedMemory (from graph-expansion prerequisite)
+        uv run python -c "from recall.memory.types import ExpandedMemory, GraphExpansionConfig"
+        ```
+
+        ## TASK DESCRIPTION
+        Add dataclasses for graph inspection response structure:
+        1. GraphNode - summarized memory info for visualization
+        2. GraphEdge - relationship info for visualization
+        3. GraphPath - path from origin with scoring
+        4. GraphStats - summary statistics
+        5. GraphInspectionResult - combined result with mermaid generation
+
+        ## PLACEMENT
+        Add new dataclasses AFTER ExpandedMemory and GraphExpansionConfig classes.
+        These are response-only structures for the inspection tool.
+
+      implementation:
+        approach: |
+          Add dataclasses following existing patterns in types.py.
+          GraphNode uses truncated content (100 chars max) for efficient responses.
+          to_mermaid() method generates flowchart with node labels and edge types.
+        key_points:
+          - point: "GraphNode with content_preview truncation"
+            details: "Max 100 chars from memory.content, ellipsis if truncated"
+            reference: "src/recall/memory/types.py"
+          - point: "GraphEdge with id, source, target, type, weight"
+            details: "Mirrors storage edge dict structure for consistency"
+            reference: "src/recall/memory/types.py"
+          - point: "GraphPath with node_ids, edge_types, total_weight, relevance_score"
+            details: "Records traversal path from origin with computed scores"
+            reference: "src/recall/memory/types.py"
+          - point: "GraphStats with counts and max_depth_reached"
+            details: "Summary for understanding graph extent"
+            reference: "src/recall/memory/types.py"
+          - point: "GraphInspectionResult.to_mermaid() method"
+            details: "Generates flowchart TD syntax: nodes as rounded rects, edges with labels"
+            reference: "src/recall/memory/types.py"
+        integration: {}
+
+      verification:
+        automated_tests:
+          command: "uv run pytest tests/unit/test_memory_types.py -v -k Graph"
+          expected_output: "Tests pass"
+
+      code_quality:
+        python:
+          full_quality_pipeline:
+            command: |
+              uv run python -m py_compile src/recall/memory/types.py && uv run pytest tests/unit/test_memory_types.py -v -k Graph
+            exit_on_failure: true
+
+      commit:
+        type: "feat"
+        message: "add GraphNode, GraphEdge, GraphPath, GraphStats, GraphInspectionResult dataclasses for graph inspection"
+        files:
+          - "src/recall/memory/types.py"
+
+    # ═══════════════════════════════════════════════════════════════
+    # TASK 2: Core Implementation
+    # ═══════════════════════════════════════════════════════════════
+    - task_number: "2"
+      name: "Implement inspect_graph function"
+      agent: "python-pro"
+      files:
+        - "src/recall/memory/operations.py"
+      depends_on: [1]
+      estimated_time: "40m"
+
+      success_criteria:
+        - "inspect_graph() async function exists with parameters: store (HybridStore), memory_id (str), direction (str, default='both'), max_depth (int, default=2), edge_types (Optional[list[str]]), include_scores (bool, default=True)."
+        - "inspect_graph() returns GraphInspectionResult containing nodes, edges, paths, and stats."
+        - "inspect_graph() uses BFS traversal starting from memory_id."
+        - "inspect_graph() respects direction parameter: 'outgoing', 'incoming', or 'both'."
+        - "inspect_graph() respects max_depth parameter (no traversal beyond depth)."
+        - "inspect_graph() filters edges by edge_types when provided (list, not set - converted internally)."
+        - "inspect_graph() computes relevance_score for each path using GraphExpansionConfig formula when include_scores=True."
+        - "inspect_graph() collects unique edges (deduped by id) traversed during inspection."
+        - "inspect_graph() caps output: max_nodes=100, max_edges=200, max_paths=50 (internal limits)."
+        - "inspect_graph() is read-only (no modifications to memory or edges)."
+        - "No TODO comments in production code paths."
+        - "No placeholder empty structs."
+        - "No unused variables."
+        - "All imports from dependency tasks resolve."
+
+      test_commands:
+        - "uv run python -c \"from recall.memory.operations import inspect_graph; print('Import OK')\""
+        - "uv run python -m py_compile src/recall/memory/operations.py"
+
+      description: |
+        ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
+        ```bash
+        # Verify Task 1 completed - types exist
+        uv run python -c "from recall.memory.types import GraphInspectionResult, GraphNode, GraphEdge, GraphPath, GraphStats"
+
+        # Verify graph-expansion prerequisite - scoring infrastructure exists
+        uv run python -c "from recall.memory.types import GraphExpansionConfig"
+        ```
+
+        ## TASK DESCRIPTION
+        Add inspect_graph() function for read-only graph inspection:
+        1. BFS traversal from origin memory
+        2. Collect nodes (memory summaries) and edges
+        3. Build paths with relevance scoring
+        4. Return GraphInspectionResult with stats
+
+        ## KEY DIFFERENCES FROM _expand_related_memories()
+        - inspect_graph() is READ-ONLY - no side effects
+        - Returns structured result for visualization
+        - Includes to_mermaid() output option
+        - Collects ALL nodes/edges traversed (not just expanded results)
+
+        ## PLACEMENT
+        Add function AFTER _expand_related_memories() function.
+
+      implementation:
+        approach: |
+          Implement BFS using collections.deque.
+          Queue items: (memory_id, depth, path_edges).
+          For each node, get edges respecting direction and type filters.
+          Build GraphNode for each visited memory, GraphEdge for each traversed edge.
+          Build GraphPath for paths from origin to each leaf.
+          Use GraphExpansionConfig scoring formula when include_scores=True.
+        key_points:
+          - point: "inspect_graph() with direction parameter"
+            details: "Pass direction to store.get_edges() for outgoing/incoming/both traversal"
+            reference: "src/recall/memory/operations.py"
+          - point: "BFS traversal with deque"
+            details: "Uses deque for O(1) popleft, processes in breadth-first order"
+            reference: "src/recall/memory/operations.py"
+          - point: "GraphNode construction from memory"
+            details: "Truncate content to 100 chars for content_preview"
+            reference: "src/recall/memory/operations.py"
+          - point: "GraphEdge deduplication by id"
+            details: "Track seen edge ids to avoid duplicates in result"
+            reference: "src/recall/memory/operations.py"
+          - point: "GraphPath with relevance scoring"
+            details: "Use GraphExpansionConfig formula: decay^hop * weight_product * geometric_mean(types)"
+            reference: "src/recall/memory/operations.py"
+          - point: "output size caps"
+            details: "max_nodes=100, max_edges=200, max_paths=50 to prevent oversized responses"
+            reference: "src/recall/memory/operations.py"
+          - point: "read-only operation"
+            details: "Only reads from store, no writes or modifications"
+            reference: "src/recall/memory/operations.py"
+        integration:
+          imports:
+            - "recall.memory.types.GraphInspectionResult"
+            - "recall.memory.types.GraphNode"
+            - "recall.memory.types.GraphEdge"
+            - "recall.memory.types.GraphPath"
+            - "recall.memory.types.GraphStats"
+            - "recall.memory.types.GraphExpansionConfig"
+
+      verification:
+        automated_tests:
+          command: "uv run python -m py_compile src/recall/memory/operations.py"
+          expected_output: "No output (success)"
+
+      code_quality:
+        python:
+          full_quality_pipeline:
+            command: |
+              uv run python -m py_compile src/recall/memory/operations.py
+            exit_on_failure: true
+
+      commit:
+        type: "feat"
+        message: "add inspect_graph function for read-only graph inspection with BFS traversal"
+        files:
+          - "src/recall/memory/operations.py"
+
+    # ═══════════════════════════════════════════════════════════════
+    # TASK 3: MCP Tool Handler
+    # ═══════════════════════════════════════════════════════════════
+    - task_number: "3"
+      name: "Add memory_inspect_graph_tool MCP handler"
+      agent: "python-pro"
+      files:
+        - "src/recall/__main__.py"
+      depends_on: [2]
+      estimated_time: "25m"
+
+      success_criteria:
+        - "memory_inspect_graph_tool() async function exists with @mcp.tool() decorator."
+        - "memory_inspect_graph_tool() parameters: memory_id (str), direction (str, default='both'), max_depth (int, default=2), edge_types (Optional[list[str]]), include_scores (bool, default=True), output_format (str, default='json')."
+        - "memory_inspect_graph_tool() validates direction is one of: 'outgoing', 'incoming', 'both'."
+        - "memory_inspect_graph_tool() validates output_format is one of: 'json', 'mermaid'."
+        - "memory_inspect_graph_tool() calls inspect_graph() with validated parameters."
+        - "memory_inspect_graph_tool() returns JSON response with nodes, edges, paths, stats when output_format='json'."
+        - "memory_inspect_graph_tool() returns mermaid diagram string when output_format='mermaid'."
+        - "memory_inspect_graph_tool() handles memory not found gracefully (success=False, error message)."
+        - "memory_inspect_graph_tool() docstring documents all parameters and response format."
+        - "No TODO comments in production code paths."
+        - "No placeholder empty structs."
+        - "No unused variables."
+        - "All imports from dependency tasks resolve."
+
+      test_commands:
+        - "uv run python -c \"from recall.__main__ import memory_inspect_graph_tool; import inspect; sig = inspect.signature(memory_inspect_graph_tool); assert 'memory_id' in sig.parameters; print('Signature OK')\""
+        - "uv run pytest tests/integration/test_mcp_server.py -v -k 'inspect_graph'"
+
+      description: |
+        ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
+        ```bash
+        # Verify Task 2 completed - inspect_graph exists
+        uv run python -c "from recall.memory.operations import inspect_graph"
+
+        # Verify existing MCP tool pattern
+        grep -n "@mcp.tool" src/recall/__main__.py | head -5
+        ```
+
+        ## TASK DESCRIPTION
+        Add memory_inspect_graph_tool MCP handler:
+        1. Parameter validation
+        2. Call inspect_graph()
+        3. Format response based on output_format
+        4. Error handling for missing memories
+
+        ## PLACEMENT
+        Add after memory_recall_tool (around line 360), following existing tool patterns.
+
+      implementation:
+        approach: |
+          Follow existing MCP tool handler patterns in __main__.py.
+          Validate parameters before calling inspect_graph().
+          Transform GraphInspectionResult to response dict or mermaid string.
+          Use try/except for graceful error handling.
+        key_points:
+          - point: "memory_inspect_graph_tool() with @mcp.tool() decorator"
+            details: "Register as MCP tool with FastMCP"
+            reference: "src/recall/__main__.py"
+          - point: "direction validation"
+            details: "Raise ValueError if not in ('outgoing', 'incoming', 'both')"
+            reference: "src/recall/__main__.py"
+          - point: "output_format validation"
+            details: "Raise ValueError if not in ('json', 'mermaid')"
+            reference: "src/recall/__main__.py"
+          - point: "JSON response format"
+            details: "nodes: list[dict], edges: list[dict], paths: list[dict], stats: dict"
+            reference: "src/recall/__main__.py"
+          - point: "mermaid output via to_mermaid()"
+            details: "Return result.to_mermaid() string when output_format='mermaid'"
+            reference: "src/recall/__main__.py"
+          - point: "error handling for missing memory"
+            details: "Return {'success': False, 'error': 'Memory not found: {id}'}"
+            reference: "src/recall/__main__.py"
+        integration:
+          imports:
+            - "recall.memory.operations.inspect_graph"
+
+      verification:
+        automated_tests:
+          command: "uv run pytest tests/integration/test_mcp_server.py -v -k inspect_graph"
+          expected_output: "Tests pass"
+
+      code_quality:
+        python:
+          full_quality_pipeline:
+            command: |
+              uv run python -m py_compile src/recall/__main__.py && uv run pytest tests/integration/test_mcp_server.py -v -k inspect_graph
+            exit_on_failure: true
+
+      commit:
+        type: "feat"
+        message: "add memory_inspect_graph_tool MCP handler for graph visualization"
+        files:
+          - "src/recall/__main__.py"
+
+    # ═══════════════════════════════════════════════════════════════
+    # TASK 4: Comprehensive Tests
+    # ═══════════════════════════════════════════════════════════════
+    - task_number: "4"
+      name: "Add comprehensive graph inspection tests"
+      agent: "test-automator"
+      files:
+        - "tests/unit/test_memory_types.py"
+        - "tests/unit/test_memory_operations.py"
+        - "tests/integration/test_mcp_server.py"
+      depends_on: [1, 2, 3]
+      estimated_time: "35m"
+
+      success_criteria:
+        - "TestGraphNode class tests content_preview truncation at 100 chars."
+        - "TestGraphEdge class tests field instantiation and access."
+        - "TestGraphPath class tests path construction with relevance_score."
+        - "TestGraphStats class tests field defaults and values."
+        - "TestGraphInspectionResult class tests to_mermaid() output format."
+        - "TestInspectGraph class tests BFS traversal with known graph topology."
+        - "TestInspectGraph class tests direction='outgoing' only follows outgoing edges."
+        - "TestInspectGraph class tests direction='incoming' only follows incoming edges."
+        - "TestInspectGraph class tests direction='both' follows all edges."
+        - "TestInspectGraph class tests max_depth is respected."
+        - "TestInspectGraph class tests edge_types filtering."
+        - "TestInspectGraph class tests output size caps (max_nodes, max_edges)."
+        - "TestInspectGraph class tests relevance scoring when include_scores=True."
+        - "TestMemoryInspectGraphTool class tests JSON output format."
+        - "TestMemoryInspectGraphTool class tests mermaid output format."
+        - "TestMemoryInspectGraphTool class tests error handling for missing memory."
+        - "All tests use pytest-asyncio for async test functions."
+        - "No TODO comments in test code."
+        - "No placeholder assertions."
+
+      test_commands:
+        - "uv run pytest tests/unit/test_memory_types.py -v -k Graph"
+        - "uv run pytest tests/unit/test_memory_operations.py -v -k 'InspectGraph'"
+        - "uv run pytest tests/integration/test_mcp_server.py -v -k 'inspect_graph'"
+
+      description: |
+        ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
+        ```bash
+        # Verify all previous tasks completed
+        uv run python -c "from recall.memory.types import GraphInspectionResult, GraphNode, GraphEdge"
+        uv run python -c "from recall.memory.operations import inspect_graph"
+        uv run python -c "from recall.__main__ import memory_inspect_graph_tool"
+
+        # Verify test file locations
+        ls tests/unit/test_memory_types.py tests/unit/test_memory_operations.py tests/integration/test_mcp_server.py
+        ```
+
+        ## TASK DESCRIPTION
+        Add comprehensive test coverage for graph inspection:
+        1. Unit tests for new dataclasses in test_memory_types.py
+        2. Unit tests for inspect_graph() in test_memory_operations.py
+        3. Integration tests for MCP tool in test_mcp_server.py
+
+        ## TEST CLASSES TO ADD
+
+        In test_memory_types.py:
+        - TestGraphNode
+        - TestGraphEdge
+        - TestGraphPath
+        - TestGraphStats
+        - TestGraphInspectionResult (including to_mermaid)
+
+        In test_memory_operations.py:
+        - TestInspectGraph
+
+        In test_mcp_server.py:
+        - TestMemoryInspectGraphTool
+
+      implementation:
+        approach: |
+          Use pytest-asyncio for async tests. Create mock HybridStore with
+          configurable edge data. Test each direction mode separately.
+          Verify mermaid output contains expected node/edge syntax.
+        key_points:
+          - point: "TestGraphNode content_preview truncation"
+            details: "Test 150-char content gets truncated to 100 with ellipsis"
+            reference: "tests/unit/test_memory_types.py"
+          - point: "TestGraphInspectionResult.to_mermaid()"
+            details: "Verify output contains 'flowchart TD', node definitions, edge arrows"
+            reference: "tests/unit/test_memory_types.py"
+          - point: "TestInspectGraph direction modes"
+            details: "Test outgoing-only, incoming-only, both - each with known graph"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "TestInspectGraph max_depth"
+            details: "Graph A->B->C->D, max_depth=2 should not reach D"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "TestInspectGraph edge_types filtering"
+            details: "Only follow specified edge types"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "TestInspectGraph output size caps"
+            details: "Create large graph, verify caps enforced"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "TestMemoryInspectGraphTool JSON format"
+            details: "Verify response has nodes, edges, paths, stats keys"
+            reference: "tests/integration/test_mcp_server.py"
+          - point: "TestMemoryInspectGraphTool mermaid format"
+            details: "Verify response is string starting with 'flowchart'"
+            reference: "tests/integration/test_mcp_server.py"
+          - point: "TestMemoryInspectGraphTool error handling"
+            details: "Non-existent memory_id returns success=False with error"
+            reference: "tests/integration/test_mcp_server.py"
+        integration: {}
+
+      verification:
+        automated_tests:
+          command: "uv run pytest tests/unit/test_memory_types.py tests/unit/test_memory_operations.py tests/integration/test_mcp_server.py -v -k 'Graph or inspect'"
+          expected_output: "Tests pass"
+
+      code_quality:
+        python:
+          full_quality_pipeline:
+            command: |
+              uv run pytest tests/unit/test_memory_types.py tests/unit/test_memory_operations.py tests/integration/test_mcp_server.py -v -k 'Graph or inspect' --tb=short
+            exit_on_failure: true
+
+      commit:
+        type: "test"
+        message: "add comprehensive tests for graph inspection tool"
+        files:
+          - "tests/unit/test_memory_types.py"
+          - "tests/unit/test_memory_operations.py"
+          - "tests/integration/test_mcp_server.py"
