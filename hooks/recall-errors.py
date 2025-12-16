@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
-"""Claude Code Notification hook for capturing error patterns.
+"""Claude Code / Factory Notification hook for capturing notifications.
 
-This hook runs when Claude Code emits notifications, particularly errors.
-It captures error patterns and stores them in recall for future debugging.
+This hook runs when the agent emits notifications. It captures error patterns,
+permission requests, and idle notifications for recall tracking.
+
+Notification types:
+- permission_prompt: Permission requests from the agent
+- idle_prompt: When agent is waiting for user input (60+ seconds idle)
+- error: Error notifications (custom, not standard Claude Code)
 
 Usage:
-    Configure in ~/.claude/settings.json:
+    Configure in ~/.claude/settings.json (Claude Code) or ~/.factory/settings.json (Factory):
     {
         "hooks": {
             "Notification": [
                 {
-                    "matcher": {"type": "error"},
+                    "matcher": "permission_prompt|idle_prompt",
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "python /path/to/recall/hooks/recall-errors.py"
+                            "command": "python /path/to/recall/hooks/recall-errors.py",
+                            "timeout": 5
                         }
                     ]
                 }
@@ -22,21 +28,18 @@ Usage:
         }
     }
 
-Input (via stdin JSON from Claude Code):
+Input (via stdin JSON):
     {
-        "type": "error",
-        "message": "Command failed with exit code 1",
-        "details": {
-            "tool": "Bash",
-            "command": "npm run build",
-            "stderr": "Error: Cannot find module..."
-        },
         "session_id": "abc123",
-        "cwd": "/project/root"
+        "transcript_path": "/path/to/transcript.jsonl",
+        "cwd": "/project/root",
+        "permission_mode": "default",
+        "hook_event_name": "Notification",
+        "message": "Agent needs your permission to use Bash",
+        "notification_type": "permission_prompt"
     }
 
-The hook extracts error information and stores it as a pattern memory,
-enabling recall to surface relevant errors when similar issues occur.
+The hook extracts notification information and logs/stores relevant patterns.
 """
 
 import json
