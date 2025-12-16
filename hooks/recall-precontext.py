@@ -88,111 +88,50 @@ def get_project_namespace() -> str:
     return "global"
 
 
-def extract_search_terms(tool_name: str, tool_input: dict) -> list[str]:
-    """Extract search terms from tool input based on tool type.
+def extract_query(tool_name: str, tool_input: dict) -> Optional[str]:
+    """Extract search query from tool input - pass raw text to semantic search.
 
     Args:
-        tool_name: Name of the tool (Bash, Write, Task, etc.)
+        tool_name: Name of the tool
         tool_input: Tool input dictionary
 
     Returns:
-        List of search terms to query recall
+        Query string for recall semantic search, or None if nothing useful
     """
-    terms = []
-
     if tool_name == "Bash":
-        command = tool_input.get("command", "").lower()
-
-        # Check for trigger keywords
-        for keyword, search_terms in BASH_TRIGGER_KEYWORDS.items():
-            if keyword in command:
-                terms.extend(search_terms)
-
-        # Extract first word as potential command
-        first_word = command.split()[0] if command.split() else ""
-        if first_word and first_word not in terms:
-            terms.append(first_word)
+        return tool_input.get("command", "")
 
     elif tool_name in ("Write", "Edit", "MultiEdit", "Read"):
         file_path = tool_input.get("file_path", "")
-
-        # Check for file pattern triggers
-        for pattern, search_terms in FILE_TRIGGER_PATTERNS.items():
-            if pattern in file_path.lower():
-                terms.extend(search_terms)
-
-        # Add file extension as term
-        ext = Path(file_path).suffix
-        if ext:
-            terms.append(ext.lstrip("."))
-        
-        # Add filename for context
-        filename = Path(file_path).name.lower()
-        if filename:
-            terms.append(filename)
+        return f"{Path(file_path).name} {Path(file_path).suffix}"
 
     elif tool_name == "Task":
-        # Subagent/Task tool - extract from prompt/description
-        prompt = tool_input.get("prompt", "").lower()
-        description = tool_input.get("description", "").lower()
-        combined = f"{prompt} {description}"
-
-        for keyword, search_terms in TASK_TRIGGER_PATTERNS.items():
-            if keyword in combined:
-                terms.extend(search_terms)
-        
-        # Add subagent type if specified
+        prompt = tool_input.get("prompt", "")
+        description = tool_input.get("description", "")
         subagent_type = tool_input.get("subagent_type", "")
-        if subagent_type:
-            terms.append(subagent_type)
+        return f"{subagent_type} {description} {prompt}"
 
-    elif tool_name in ("Glob", "Grep"):
-        # File search tools
-        pattern = tool_input.get("pattern", "") or tool_input.get("patterns", [""])[0]
-        if isinstance(pattern, list):
-            pattern = pattern[0] if pattern else ""
-        
-        # Extract file extensions from glob patterns
-        import re
-        extensions = re.findall(r'\*\.(\w+)', str(pattern))
-        for ext in extensions:
-            if ext in FILE_TRIGGER_PATTERNS.get(f".{ext}", []):
-                terms.extend(FILE_TRIGGER_PATTERNS[f".{ext}"])
-            else:
-                terms.append(ext)
-        
-        # For grep, include the search pattern
-        if tool_name == "Grep":
-            search_pattern = tool_input.get("pattern", "")
-            if search_pattern and len(search_pattern) > 3:
-                terms.append(search_pattern[:50])
+    elif tool_name == "Glob":
+        patterns = tool_input.get("patterns", [])
+        if isinstance(patterns, list):
+            return " ".join(patterns)
+        return tool_input.get("pattern", "")
 
-    elif tool_name in ("WebFetch", "WebSearch"):
-        # Web operations
-        url = tool_input.get("url", "").lower()
-        query = tool_input.get("query", "").lower()
-        combined = f"{url} {query}"
+    elif tool_name == "Grep":
+        return tool_input.get("pattern", "")
 
-        for keyword, search_terms in WEB_TRIGGER_PATTERNS.items():
-            if keyword in combined:
-                terms.extend(search_terms)
-        
-        # Add the query itself for context
-        if query:
-            terms.append(query[:50])
+    elif tool_name == "WebFetch":
+        return tool_input.get("url", "")
+
+    elif tool_name == "WebSearch":
+        return tool_input.get("query", "")
 
     elif tool_name.startswith("mcp__"):
-        # MCP tools - extract server and tool name
+        # MCP tools - use server and tool name
         parts = tool_name.split("__")
-        if len(parts) >= 2:
-            server = parts[1]
-            terms.append(server)
-            terms.append("mcp")
-        if len(parts) >= 3:
-            mcp_tool = parts[2]
-            terms.append(mcp_tool)
+        return " ".join(parts[1:])
 
-    return list(set(terms))  # Deduplicate
+    return None
 
 
 def call_recall(tool_name: str, args: dict) -> dict:
