@@ -277,16 +277,13 @@ def main():
         if tool_name not in SUPPORTED_TOOLS and not is_mcp:
             return
 
-        # Extract search terms
-        search_terms = extract_search_terms(tool_name, tool_input)
-        if not search_terms:
+        # Extract query from tool input
+        query = extract_query(tool_name, tool_input)
+        if not query or not query.strip():
             return
 
         # Get project namespace
         namespace = get_project_namespace()
-
-        # Search for relevant memories
-        query = " ".join(search_terms)
         result = call_recall("memory_recall_tool", {
             "query": query,
             "n_results": 5,
