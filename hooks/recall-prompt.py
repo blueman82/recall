@@ -71,21 +71,7 @@ def get_project_namespace() -> str:
     return "global"
 
 
-def extract_search_terms(prompt: str) -> list[str]:
-    """Extract search terms from the user's prompt."""
-    prompt_lower = prompt.lower()
-    terms = set()
-    
-    for keyword, search_terms in PROMPT_TRIGGERS.items():
-        if keyword in prompt_lower:
-            terms.update(search_terms)
-    
-    # Also extract potential file extensions mentioned
-    import re
-    extensions = re.findall(r'\.(py|ts|tsx|js|jsx|rs|go|java|rb|php|swift|kt|cs)\b', prompt_lower)
-    terms.update(extensions)
-    
-    return list(terms)
+
 
 
 def call_recall(tool_name: str, args: dict) -> dict:
