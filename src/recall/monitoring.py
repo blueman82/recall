@@ -78,9 +78,9 @@ class Monitor:
         use_claude_cli: If True, use Claude CLI headless mode; if False, use Ollama
 
     Example:
-        >>> settings = RecallSettings(anthropic_api_key="sk-...")
+        >>> settings = RecallSettings()
         >>> async with HybridStore.create() as store:
-        ...     monitor = Monitor(store, settings)
+        ...     monitor = Monitor(store, settings, use_claude_cli=True)
         ...     result = await monitor.run_check()
         ...     if result.issues:
         ...         analysis = await monitor.analyze_issues(result.issues)
