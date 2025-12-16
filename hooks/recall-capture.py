@@ -1,24 +1,31 @@
 #!/usr/bin/env python3
-"""Claude Code SessionEnd hook for capturing session memories.
+"""Claude Code / Factory SessionEnd hook for capturing session memories.
 
-This hook runs at the end of each Claude Code session and summarizes
-the conversation to store important decisions, preferences, and patterns.
+This hook runs at the end of each session and summarizes the conversation
+to store important decisions, preferences, and patterns.
 It uses Ollama for local summarization and recall MCP for storage.
 
+SessionEnd reasons: clear, logout, prompt_input_exit, other
+
 Usage:
-    Configure in ~/.claude/settings.json:
+    Configure in ~/.claude/settings.json (Claude Code) or ~/.factory/settings.json (Factory):
     {
         "hooks": {
             "SessionEnd": [
                 {
-                    "command": "python /path/to/recall/hooks/recall-capture.py",
-                    "timeout": 30000
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "python /path/to/recall/hooks/recall-capture.py",
+                            "timeout": 30
+                        }
+                    ]
                 }
             ]
         }
     }
 
-Input (via stdin JSON from Claude Code):
+Input (via stdin JSON):
     {
         "session_id": "abc123",
         "transcript_path": "~/.claude/projects/.../session.jsonl",
