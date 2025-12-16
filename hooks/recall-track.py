@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""Claude Code PostToolUse hook for tracking file operations.
+"""Claude Code / Factory PostToolUse hook for tracking tool operations.
 
-This hook runs after file-related tool calls (Read, Write, Edit, MultiEdit)
-and records the file activity in recall's file_activity table.
+This hook runs after tool calls complete and records activity in recall.
+Tracks file operations, searches, web fetches, and subagent tasks.
+
+Supported tools: Task, Bash, Glob, Grep, Read, Write, Edit, MultiEdit, WebFetch, WebSearch, mcp__*
 
 Usage:
-    Configure in ~/.claude/settings.json:
+    Configure in ~/.claude/settings.json (Claude Code) or ~/.factory/settings.json (Factory):
     {
         "hooks": {
             "PostToolUse": [
                 {
-                    "matcher": "Read|Write|Edit|MultiEdit",
+                    "matcher": "Task|Bash|Glob|Grep|Read|Write|Edit|MultiEdit|WebFetch|WebSearch|mcp__.*",
                     "hooks": [
                         {
                             "type": "command",
                             "command": "python /path/to/recall/hooks/recall-track.py",
-                            "timeout": 5000
+                            "timeout": 5
                         }
                     ]
                 }
@@ -23,16 +25,17 @@ Usage:
         }
     }
 
-Input (via stdin JSON from Claude Code):
+Input (via stdin JSON):
     {
         "tool_name": "Write",
         "tool_input": {"file_path": "/path/to/file.py", "content": "..."},
+        "tool_response": {"success": true, "filePath": "/path/to/file.py"},
         "session_id": "abc123",
         "cwd": "/project/root"
     }
 
-The hook extracts the file path and action, then stores it in recall.
-Failures are handled gracefully to avoid blocking Claude Code.
+The hook extracts relevant info and stores it in recall.
+Failures are handled gracefully to avoid blocking the agent.
 """
 
 import json
