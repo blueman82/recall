@@ -50,68 +50,6 @@ from pathlib import Path
 from typing import Optional
 
 
-# Keywords that trigger memory lookups for Bash commands
-BASH_TRIGGER_KEYWORDS = {
-    # Package managers
-    "npm": ["package manager", "npm", "pnpm", "yarn"],
-    "pnpm": ["package manager", "pnpm"],
-    "yarn": ["package manager", "yarn"],
-    "pip": ["pip", "uv", "python package"],
-    "uv": ["uv", "pip", "python package"],
-
-    # Git operations
-    "git push": ["git push", "dual repo", "remote"],
-    "git commit": ["git commit", "commit message"],
-    "git checkout": ["git branch", "checkout"],
-
-    # Build/test commands
-    "pytest": ["pytest", "test", "testing"],
-    "jest": ["jest", "test", "testing"],
-    "docker": ["docker", "container"],
-    "make": ["makefile", "build"],
-}
-
-# File patterns that trigger memory lookups for Write/Edit/Read
-FILE_TRIGGER_PATTERNS = {
-    ".py": ["python", "coding style"],
-    ".ts": ["typescript", "coding style"],
-    ".tsx": ["react", "typescript", "component"],
-    ".js": ["javascript", "coding style"],
-    ".jsx": ["react", "javascript", "component"],
-    "Dockerfile": ["docker", "container"],
-    "docker-compose": ["docker", "compose"],
-    ".env": ["environment", "secrets", "config"],
-    ".yaml": ["yaml", "config"],
-    ".yml": ["yaml", "config"],
-    ".json": ["json", "config"],
-    ".toml": ["toml", "config"],
-    ".rs": ["rust", "cargo"],
-    ".go": ["golang", "go"],
-    ".swift": ["swift", "ios", "macos"],
-    ".kt": ["kotlin", "android"],
-}
-
-# Task (subagent) trigger patterns
-TASK_TRIGGER_PATTERNS = {
-    "test": ["test", "testing"],
-    "review": ["code review", "review"],
-    "debug": ["debug", "error", "fix"],
-    "refactor": ["refactor", "clean"],
-    "document": ["documentation", "docs"],
-    "security": ["security", "vulnerability"],
-    "performance": ["performance", "optimization"],
-}
-
-# Web operation triggers
-WEB_TRIGGER_PATTERNS = {
-    "api": ["api", "endpoint"],
-    "documentation": ["documentation", "docs"],
-    "github": ["github", "repository"],
-    "npm": ["npm", "package"],
-    "pypi": ["pypi", "python package"],
-}
-
-
 def read_hook_input() -> dict:
     """Read hook input from stdin.
 
