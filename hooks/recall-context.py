@@ -1,29 +1,37 @@
 #!/usr/bin/env python3
-"""Claude Code SessionStart hook for loading relevant memory context.
+"""Claude Code / Factory SessionStart hook for loading relevant memory context.
 
-This hook runs at the start of each Claude Code session and injects
-relevant memories as system context. It uses Ollama (llama3.2) for
-intelligent curation and synthesis of memories.
+This hook runs at the start of each session and injects relevant memories
+as system context. It uses Ollama (llama3.2) for intelligent curation
+and synthesis of memories.
+
+SessionStart matchers: startup, resume, clear, compact
 
 Architecture:
     Phase 1: Fetch raw memories via recall --call mode
     Phase 2: Curate with Ollama for synthesis and prioritization
 
 Usage:
-    Configure in ~/.claude/settings.json:
+    Configure in ~/.claude/settings.json (Claude Code) or ~/.factory/settings.json (Factory):
     {
         "hooks": {
             "SessionStart": [
                 {
-                    "command": "python /path/to/recall/hooks/recall-context.py",
-                    "timeout": 10000
+                    "matcher": "startup|resume",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "python /path/to/recall/hooks/recall-context.py",
+                            "timeout": 10
+                        }
+                    ]
                 }
             ]
         }
     }
 
-The hook outputs markdown context that Claude Code will see at session start.
-Failures are handled gracefully - they don't block Claude Code.
+The hook outputs markdown context that the agent will see at session start.
+Failures are handled gracefully - they don't block the agent.
 """
 
 import json
