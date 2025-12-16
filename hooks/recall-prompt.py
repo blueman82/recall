@@ -165,17 +165,10 @@ def main():
         if cwd:
             os.chdir(cwd)
         
-        # Extract search terms from prompt
-        search_terms = extract_search_terms(prompt)
-        
-        # Always search with the prompt itself too
-        query_parts = search_terms + [prompt[:100]]
-        query = " ".join(query_parts)
-        
-        if not query.strip():
-            return
-        
         namespace = get_project_namespace()
+        
+        # Use prompt directly as query - let semantic search do its job
+        query = prompt
         
         # Search for relevant memories
         result = call_recall("memory_recall_tool", {
