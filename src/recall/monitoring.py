@@ -444,11 +444,11 @@ Respond ONLY with a JSON object:
             logger.error(f"Unexpected error calling Claude CLI: {e}")
             return None
 
-    async def _call_anthropic_opus(self, prompt: str) -> Optional[dict[str, Any]]:
-        """Call Claude for deep analysis using CLI.
+    async def _call_claude_opus(self, prompt: str) -> Optional[dict[str, Any]]:
+        """Call Claude Opus for deep analysis using CLI headless mode.
 
-        This is a convenience wrapper that calls _call_claude_cli with opus model.
-        Kept for backwards compatibility.
+        Uses `claude -p` with the opus model for thorough analysis.
+        Leverages existing Claude Code authentication.
 
         Args:
             prompt: Analysis prompt
