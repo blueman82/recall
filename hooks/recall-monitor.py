@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Claude Code PostSessionEnd hook for memory system monitoring.
+"""Claude Code / Factory SessionEnd hook for memory system monitoring.
 
-This hook runs at the end of each Claude Code session and performs automated
+This hook runs at the end of each session and performs automated
 health checks on the recall memory system:
 - Quick Haiku check for common issues (~$0.001)
 - Deep Opus analysis if issues found (~$0.10)
@@ -9,13 +9,18 @@ health checks on the recall memory system:
 - Stores analysis results as memories
 
 Usage:
-    Configure in ~/.claude/settings.json:
+    Configure in ~/.claude/settings.json (Claude Code) or ~/.factory/settings.json (Factory):
     {
         "hooks": {
-            "PostSessionEnd": [
+            "SessionEnd": [
                 {
-                    "command": "uv run --directory /path/to/recall python hooks/recall-monitor.py",
-                    "timeout": 30000
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "uv run --directory /path/to/recall python hooks/recall-monitor.py",
+                            "timeout": 30
+                        }
+                    ]
                 }
             ]
         }
