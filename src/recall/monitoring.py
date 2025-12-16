@@ -248,9 +248,9 @@ class Monitor:
             # Build analysis prompt
             prompt = self._build_analysis_prompt(issues)
 
-            # Call Claude Opus (or Ollama fallback)
-            if self._use_anthropic:
-                response = await self._call_anthropic_opus(prompt)
+            # Call Claude Opus via CLI (or Ollama fallback)
+            if self._use_claude_cli:
+                response = await self._call_claude_opus(prompt)
             else:
                 response = await self._call_ollama_analysis(prompt)
 
