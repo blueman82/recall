@@ -98,9 +98,8 @@ async def run_monitoring() -> None:
         )
 
         try:
-            # Create monitor
-            use_anthropic = settings.anthropic_api_key is not None
-            monitor = Monitor(store, settings, use_anthropic=use_anthropic)
+            # Create monitor (uses Claude CLI headless mode for deep analysis)
+            monitor = Monitor(store, settings, use_claude_cli=True)
 
             # Run check on ALL namespaces (None = no filter)
             # Monitoring should check everything, not just current project
