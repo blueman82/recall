@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
-"""Claude Code PreToolUse hook for injecting relevant memory context.
+"""Claude Code / Factory PreToolUse hook for injecting relevant memory context.
 
-This hook runs BEFORE certain tool calls (Bash, Write) and injects relevant
-memories as context reminders. This helps prevent mistakes by surfacing
-relevant preferences, patterns, and past decisions.
+This hook runs BEFORE tool calls and injects relevant memories as context
+reminders. This helps prevent mistakes by surfacing relevant preferences,
+patterns, and past decisions.
+
+Supported tools: Task, Bash, Glob, Grep, Read, Edit, Write, WebFetch, WebSearch, mcp__*
 
 Usage:
-    Configure in ~/.claude/settings.json:
+    Configure in ~/.claude/settings.json (Claude Code) or ~/.factory/settings.json (Factory):
     {
         "hooks": {
             "PreToolUse": [
                 {
-                    "matcher": "Bash|Write",
+                    "matcher": "Task|Bash|Glob|Grep|Read|Edit|Write|WebFetch|WebSearch|mcp__.*",
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "python /path/to/recall/hooks/recall-precontext.py"
+                            "command": "python /path/to/recall/hooks/recall-precontext.py",
+                            "timeout": 5
                         }
                     ]
                 }
@@ -23,7 +26,7 @@ Usage:
         }
     }
 
-Input (via stdin JSON from Claude Code):
+Input (via stdin JSON):
     {
         "tool_name": "Bash",
         "tool_input": {"command": "npm install express"},
