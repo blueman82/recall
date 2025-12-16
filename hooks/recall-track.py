@@ -74,10 +74,10 @@ def get_file_type(file_path: str) -> Optional[str]:
         file_path: Path to the file
 
     Returns:
-        File type string or None if unknown
+        File extension (e.g., '.py', '.ts') or None if no extension
     """
     ext = Path(file_path).suffix.lower()
-    return FILE_TYPE_MAP.get(ext)
+    return ext if ext else None
 
 
 def extract_file_path(tool_name: str, tool_input: dict) -> Optional[str]:
