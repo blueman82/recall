@@ -236,19 +236,112 @@ def call_recall(tool_name: str, args: dict) -> dict:
         return {"success": False, "error": str(e)}
 
 
+def track_file_activity(tool_name: str, tool_input: dict, session_id: str, cwd: str, log_path: Path) -> None:
+    """Track file-related tool activity."""
+    from datetime import datetime
+
+    file_path = extract_file_path(tool_name, tool_input)
+    if not file_path:
+        return
+
+    action = get_action(tool_name)
+    file_type = get_file_type(file_path)
+    project_root = find_project_root(file_path) or cwd
+
+    with open(log_path, "a") as f:
+        f.write(f"{datetime.now().isoformat()} | {action} | {file_path} | project={project_root}\n")
+
+    result = call_recall("file_activity_add", {
+        "file_path": file_path,
+        "action": action,
+        "session_id": session_id,
+        "project_root": project_root,
+        "file_type": file_type,
+    })
+
+    if not result.get("success"):
+        with open(log_path, "a") as f:
+            f.write(f"{datetime.now().isoformat()} | WARN: {result.get('error', 'unknown error')}\n")
+
+
+def track_search_activity(tool_name: str, tool_input: dict, session_id: str, cwd: str, log_path: Path) -> None:
+    """Track search tool activity (Glob, Grep)."""
+    from datetime import datetime
+
+    pattern = tool_input.get("pattern", "") or str(tool_input.get("patterns", []))
+    path = tool_input.get("path", cwd)
+
+    with open(log_path, "a") as f:
+        f.write(f"{datetime.now().isoformat()} | {tool_name.lower()} | pattern={pattern[:50]} | path={path}\n")
+
+
+def track_web_activity(tool_name: str, tool_input: dict, tool_response: dict, session_id: str, log_path: Path) -> None:
+    """Track web tool activity (WebFetch, WebSearch)."""
+    from datetime import datetime
+
+    if tool_name == "WebFetch":
+        url = tool_input.get("url", "")
+        with open(log_path, "a") as f:
+            f.write(f"{datetime.now().isoformat()} | webfetch | url={url[:100]}\n")
+    elif tool_name == "WebSearch":
+        query = tool_input.get("query", "")
+        with open(log_path, "a") as f:
+            f.write(f"{datetime.now().isoformat()} | websearch | query={query[:100]}\n")
+
+
+def track_task_activity(tool_input: dict, tool_response: dict, session_id: str, log_path: Path) -> None:
+    """Track Task (subagent) activity."""
+    from datetime import datetime
+
+    description = tool_input.get("description", "")
+    subagent_type = tool_input.get("subagent_type", "")
+
+    with open(log_path, "a") as f:
+        f.write(f"{datetime.now().isoformat()} | task | type={subagent_type} | desc={description[:50]}\n")
+
+
+def track_bash_activity(tool_input: dict, tool_response: dict, session_id: str, log_path: Path) -> None:
+    """Track Bash command activity."""
+    from datetime import datetime
+
+    command = tool_input.get("command", "")[:100]
+
+    with open(log_path, "a") as f:
+        f.write(f"{datetime.now().isoformat()} | bash | cmd={command}\n")
+
+
+def track_mcp_activity(tool_name: str, tool_input: dict, tool_response: dict, session_id: str, log_path: Path) -> None:
+    """Track MCP tool activity."""
+    from datetime import datetime
+
+    # Parse mcp__server__tool format
+    parts = tool_name.split("__")
+    server = parts[1] if len(parts) >= 2 else "unknown"
+    mcp_tool = parts[2] if len(parts) >= 3 else "unknown"
+
+    with open(log_path, "a") as f:
+        f.write(f"{datetime.now().isoformat()} | mcp | server={server} | tool={mcp_tool}\n")
+
+
 def main():
     """Main hook entry point.
 
-    Reads tool call data, extracts file info, and stores activity.
-    All errors are caught to prevent blocking Claude Code.
+    Reads tool call data, extracts relevant info, and stores activity.
+    All errors are caught to prevent blocking the agent.
     """
     from datetime import datetime
+
+    # Supported tools
+    FILE_TOOLS = {"Read", "Write", "Edit", "MultiEdit"}
+    SEARCH_TOOLS = {"Glob", "Grep"}
+    WEB_TOOLS = {"WebFetch", "WebSearch"}
 
     # Read hook input from stdin
     hook_input = read_hook_input()
 
     tool_name = hook_input.get("tool_name", "")
     tool_input = hook_input.get("tool_input", {})
+    tool_response = hook_input.get("tool_response", {})
     session_id = hook_input.get("session_id")
     cwd = hook_input.get("cwd", os.getcwd())
 
@@ -257,44 +350,30 @@ def main():
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Only process file-related tools
-        if tool_name not in ("Read", "Write", "Edit", "MultiEdit"):
-            return
+        # Route to appropriate tracker based on tool type
+        if tool_name in FILE_TOOLS:
+            track_file_activity(tool_name, tool_input, session_id, cwd, log_path)
 
-        # Extract file path from tool input
-        file_path = extract_file_path(tool_name, tool_input)
-        if not file_path:
-            return
+        elif tool_name in SEARCH_TOOLS:
+            track_search_activity(tool_name, tool_input, session_id, cwd, log_path)
 
-        # Determine action and file type
-        action = get_action(tool_name)
-        file_type = get_file_type(file_path)
+        elif tool_name in WEB_TOOLS:
+            track_web_activity(tool_name, tool_input, tool_response, session_id, log_path)
 
-        # Find project root
-        project_root = find_project_root(file_path) or cwd
+        elif tool_name == "Task":
+            track_task_activity(tool_input, tool_response, session_id, log_path)
 
-        # Log the activity
-        with open(log_path, "a") as f:
-            f.write(f"{datetime.now().isoformat()} | {action} | {file_path} | project={project_root}\n")
+        elif tool_name == "Bash":
+            track_bash_activity(tool_input, tool_response, session_id, log_path)
 
-        # Store file activity via recall
-        result = call_recall("file_activity_add", {
-            "file_path": file_path,
-            "action": action,
-            "session_id": session_id,
-            "project_root": project_root,
-            "file_type": file_type,
-        })
-
-        if not result.get("success"):
-            with open(log_path, "a") as f:
-                f.write(f"{datetime.now().isoformat()} | WARN: {result.get('error', 'unknown error')}\n")
+        elif tool_name.startswith("mcp__"):
+            track_mcp_activity(tool_name, tool_input, tool_response, session_id, log_path)
 
     except BrokenPipeError:
-        # Claude Code closed connection - this is fine
+        # Agent closed connection - this is fine
         pass
     except Exception as e:
-        # Log error but don't block Claude Code
+        # Log error but don't block the agent
         try:
             with open(log_path, "a") as f:
                 f.write(f"{datetime.now().isoformat()} | ERROR: {e}\n")
