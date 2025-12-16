@@ -75,7 +75,7 @@ class Monitor:
     Args:
         store: HybridStore instance for memory operations
         settings: RecallSettings for configuration
-        use_anthropic: If True, use Anthropic API; if False, use Ollama
+        use_claude_cli: If True, use Claude CLI headless mode; if False, use Ollama
 
     Example:
         >>> settings = RecallSettings(anthropic_api_key="sk-...")
