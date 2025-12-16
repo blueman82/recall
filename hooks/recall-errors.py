@@ -319,72 +319,100 @@ def check_duplicate_error(namespace: str, subcategory: str, message: str) -> boo
         return False
 
 
+def handle_permission_prompt(hook_input: dict, log_path: Path) -> None:
+    """Handle permission_prompt notifications."""
+    message = hook_input.get("message", "")
+    session_id = hook_input.get("session_id")
+
+    with open(log_path, "a") as f:
+        f.write(f"{datetime.now().isoformat()} | PERMISSION | {message[:100]}\n")
+
+
+def handle_idle_prompt(hook_input: dict, log_path: Path) -> None:
+    """Handle idle_prompt notifications."""
+    message = hook_input.get("message", "")
+    session_id = hook_input.get("session_id")
+
+    with open(log_path, "a") as f:
+        f.write(f"{datetime.now().isoformat()} | IDLE | {message[:100]}\n")
+
+
+def handle_error_notification(hook_input: dict, log_path: Path) -> None:
+    """Handle error notifications and store as patterns."""
+    message = hook_input.get("message", "")
+    details = hook_input.get("details", {})
+    session_id = hook_input.get("session_id")
+
+    if not message:
+        return
+
+    with open(log_path, "a") as f:
+        f.write(f"{datetime.now().isoformat()} | ERROR | {message[:100]}\n")
+
+    namespace = get_project_namespace()
+    category, subcategory = categorize_error(message, details)
+
+    if check_duplicate_error(namespace, subcategory, message):
+        with open(log_path, "a") as f:
+            f.write(f"{datetime.now().isoformat()} | SKIP | Duplicate error\n")
+        return
+
+    context = extract_error_context(message, details)
+    content = format_error_memory(message, details, category, subcategory)
+
+    result = call_recall("memory_store_tool", {
+        "content": content,
+        "memory_type": "pattern",
+        "namespace": namespace,
+        "importance": 0.6,
+        "metadata": {
+            "source": "recall-errors",
+            "category": category,
+            "subcategory": subcategory,
+            "session_id": session_id,
+            **context,
+        },
+    })
+
+    if result.get("success"):
+        with open(log_path, "a") as f:
+            f.write(f"{datetime.now().isoformat()} | STORED | {subcategory}\n")
+    else:
+        with open(log_path, "a") as f:
+            f.write(f"{datetime.now().isoformat()} | FAIL | {result.get('error')}\n")
+
+
 def main():
     """Main hook entry point.
 
-    Captures error notifications and stores them as pattern memories.
+    Handles different notification types:
+    - permission_prompt: Logs permission requests
+    - idle_prompt: Logs idle notifications
+    - error: Captures and stores error patterns
     """
     log_path = Path.home() / ".claude" / "hooks" / "logs" / "recall-errors.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Read hook input
         hook_input = read_hook_input()
 
-        # Only process error notifications
-        if hook_input.get("type") != "error":
-            return
+        # Get notification type (new format) or type (legacy format)
+        notification_type = hook_input.get("notification_type") or hook_input.get("type", "")
 
-        message = hook_input.get("message", "")
-        details = hook_input.get("details", {})
-        session_id = hook_input.get("session_id")
+        if notification_type == "permission_prompt":
+            handle_permission_prompt(hook_input, log_path)
 
-        if not message:
-            return
+        elif notification_type == "idle_prompt":
+            handle_idle_prompt(hook_input, log_path)
 
-        # Log the error
-        with open(log_path, "a") as f:
-            f.write(f"{datetime.now().isoformat()} | ERROR | {message[:100]}\n")
+        elif notification_type == "error":
+            handle_error_notification(hook_input, log_path)
 
-        # Get project namespace
-        namespace = get_project_namespace()
-
-        # Categorize the error
-        category, subcategory = categorize_error(message, details)
-
-        # Check for duplicate
-        if check_duplicate_error(namespace, subcategory, message):
-            with open(log_path, "a") as f:
-                f.write(f"{datetime.now().isoformat()} | SKIP | Duplicate error\n")
-            return
-
-        # Extract context
-        context = extract_error_context(message, details)
-
-        # Format memory content
-        content = format_error_memory(message, details, category, subcategory)
-
-        # Store the error pattern
-        result = call_recall("memory_store_tool", {
-            "content": content,
-            "memory_type": "pattern",
-            "namespace": namespace,
-            "importance": 0.6,  # Moderate importance
-            "metadata": {
-                "source": "recall-errors",
-                "category": category,
-                "subcategory": subcategory,
-                "session_id": session_id,
-                **context,
-            },
-        })
-
-        if result.get("success"):
-            with open(log_path, "a") as f:
-                f.write(f"{datetime.now().isoformat()} | STORED | {subcategory}\n")
         else:
+            # Log unknown notification types for debugging
+            message = hook_input.get("message", "")[:50]
             with open(log_path, "a") as f:
-                f.write(f"{datetime.now().isoformat()} | FAIL | {result.get('error')}\n")
+                f.write(f"{datetime.now().isoformat()} | UNKNOWN | type={notification_type} | {message}\n")
 
     except BrokenPipeError:
         pass
