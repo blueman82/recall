@@ -1,0 +1,110 @@
+{
+  "$schema": "https://docs.factory.ai/schemas/settings.json",
+  "_comment": [
+    "Example hooks configuration for recall memory system.",
+    "Copy relevant sections to:",
+    "  - Claude Code: ~/.claude/settings.json",
+    "  - Factory: ~/.factory/settings.json",
+    "Replace /path/to/recall with your actual recall installation path."
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Task|Bash|Glob|Grep|Read|Edit|Write|WebFetch|WebSearch|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python /path/to/recall/hooks/recall-precontext.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Task|Bash|Glob|Grep|Read|Write|Edit|MultiEdit|WebFetch|WebSearch|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python /path/to/recall/hooks/recall-track.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python /path/to/recall/hooks/recall-prompt.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python /path/to/recall/hooks/recall-stop.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python /path/to/recall/hooks/recall-subagent.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "auto|manual",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python /path/to/recall/hooks/recall-compact.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python /path/to/recall/hooks/recall-context.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python /path/to/recall/hooks/recall-capture.py",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "python /path/to/recall/hooks/recall-monitor.py",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
