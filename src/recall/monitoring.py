@@ -90,18 +90,18 @@ class Monitor:
         self,
         store: HybridStore,
         settings: RecallSettings,
-        use_anthropic: bool = True,
+        use_claude_cli: bool = True,
     ):
         """Initialize Monitor with store and settings.
 
         Args:
             store: HybridStore instance
             settings: RecallSettings instance
-            use_anthropic: Whether to use Anthropic API (vs Ollama)
+            use_claude_cli: Whether to use Claude CLI headless mode (vs Ollama)
         """
         self._store = store
         self._settings = settings
-        self._use_anthropic = use_anthropic
+        self._use_claude_cli = use_claude_cli
 
     async def haiku_check(
         self, namespace: Optional[str] = None
