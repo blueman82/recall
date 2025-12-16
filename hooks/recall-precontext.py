@@ -375,17 +375,29 @@ def main():
     """Main hook entry point.
 
     Reads tool call data, searches for relevant memories, and outputs
-    context reminders. Failures are silent to avoid blocking Claude Code.
+    context reminders. Failures are silent to avoid blocking the agent.
     """
+    # Supported tools for memory context injection
+    SUPPORTED_TOOLS = {
+        "Task", "Bash", "Glob", "Grep", "Read", "Edit", "MultiEdit",
+        "Write", "WebFetch", "WebSearch",
+    }
+
     try:
         # Read hook input from stdin
         hook_input = read_hook_input()
 
         tool_name = hook_input.get("tool_name", "")
         tool_input = hook_input.get("tool_input", {})
+        cwd = hook_input.get("cwd")
 
-        # Only process supported tools
-        if tool_name not in ("Bash", "Write"):
+        # Change to session's working directory if provided
+        if cwd:
+            os.chdir(cwd)
+
+        # Check if tool is supported (including MCP tools)
+        is_mcp = tool_name.startswith("mcp__")
+        if tool_name not in SUPPORTED_TOOLS and not is_mcp:
             return
 
         # Extract search terms
@@ -427,10 +439,10 @@ def main():
             print(reminder)
 
     except BrokenPipeError:
-        # Claude Code closed connection - this is fine
+        # Agent closed connection - this is fine
         pass
     except Exception:
-        # Silently fail - don't block Claude Code
+        # Silently fail - don't block the agent
         pass
 
 
