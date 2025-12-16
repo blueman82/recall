@@ -71,8 +71,8 @@ BASH_TRIGGER_KEYWORDS = {
     "make": ["makefile", "build"],
 }
 
-# File patterns that trigger memory lookups for Write
-WRITE_TRIGGER_PATTERNS = {
+# File patterns that trigger memory lookups for Write/Edit/Read
+FILE_TRIGGER_PATTERNS = {
     ".py": ["python", "coding style"],
     ".ts": ["typescript", "coding style"],
     ".tsx": ["react", "typescript", "component"],
@@ -81,6 +81,34 @@ WRITE_TRIGGER_PATTERNS = {
     "Dockerfile": ["docker", "container"],
     "docker-compose": ["docker", "compose"],
     ".env": ["environment", "secrets", "config"],
+    ".yaml": ["yaml", "config"],
+    ".yml": ["yaml", "config"],
+    ".json": ["json", "config"],
+    ".toml": ["toml", "config"],
+    ".rs": ["rust", "cargo"],
+    ".go": ["golang", "go"],
+    ".swift": ["swift", "ios", "macos"],
+    ".kt": ["kotlin", "android"],
+}
+
+# Task (subagent) trigger patterns
+TASK_TRIGGER_PATTERNS = {
+    "test": ["test", "testing"],
+    "review": ["code review", "review"],
+    "debug": ["debug", "error", "fix"],
+    "refactor": ["refactor", "clean"],
+    "document": ["documentation", "docs"],
+    "security": ["security", "vulnerability"],
+    "performance": ["performance", "optimization"],
+}
+
+# Web operation triggers
+WEB_TRIGGER_PATTERNS = {
+    "api": ["api", "endpoint"],
+    "documentation": ["documentation", "docs"],
+    "github": ["github", "repository"],
+    "npm": ["npm", "package"],
+    "pypi": ["pypi", "python package"],
 }
 
 
