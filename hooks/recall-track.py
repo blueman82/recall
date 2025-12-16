@@ -46,40 +46,6 @@ from pathlib import Path
 from typing import Optional
 
 
-# File extension to type mapping
-FILE_TYPE_MAP = {
-    ".py": "python",
-    ".js": "javascript",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".jsx": "javascript",
-    ".rs": "rust",
-    ".go": "go",
-    ".java": "java",
-    ".rb": "ruby",
-    ".php": "php",
-    ".swift": "swift",
-    ".kt": "kotlin",
-    ".c": "c",
-    ".cpp": "cpp",
-    ".h": "c",
-    ".hpp": "cpp",
-    ".cs": "csharp",
-    ".md": "markdown",
-    ".json": "json",
-    ".yaml": "yaml",
-    ".yml": "yaml",
-    ".toml": "toml",
-    ".html": "html",
-    ".css": "css",
-    ".scss": "scss",
-    ".sql": "sql",
-    ".sh": "shell",
-    ".bash": "shell",
-    ".zsh": "shell",
-}
-
-
 def read_hook_input() -> dict:
     """Read hook input from stdin.
 
