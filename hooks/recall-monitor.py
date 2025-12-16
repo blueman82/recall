@@ -23,8 +23,10 @@ Usage:
 
 Environment Variables:
     RECALL_MONITOR_ENABLED: Set to "true" to enable (default: false)
-    RECALL_ANTHROPIC_API_KEY: Anthropic API key for Claude analysis
     RECALL_MONITOR_DEEP: Set to "true" for deep Opus analysis (default: true)
+
+Note: Deep analysis uses Claude Code headless mode (`claude -p`), not the Anthropic API.
+      This leverages your existing Claude Code authentication - no separate API key needed.
 
 The hook runs silently unless issues are found, then outputs to stderr.
 Failures are handled gracefully - they don't block Claude Code.
