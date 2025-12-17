@@ -13,7 +13,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import httpx
 
@@ -44,6 +44,62 @@ RELATIONSHIP_SIMILARITY_THRESHOLD = 0.6
 
 # Maximum number of relationships to create per memory store
 MAX_AUTO_RELATIONSHIPS = 5
+
+def is_memory_id(value: str) -> bool:
+    """Check if a value matches a memory ID pattern.
+
+    Detects two memory ID formats:
+    - UUID4: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (validated via uuid.UUID)
+    - Timestamped: mem_{timestamp}_{hex8} (e.g., mem_1702783200000000_abc12def)
+
+    Uses stdlib uuid parsing instead of regex for robustness.
+
+    Args:
+        value: The string to check
+
+    Returns:
+        True if the value matches a memory ID pattern, False otherwise
+    """
+    if not value or not isinstance(value, str):
+        return False
+
+    stripped = value.strip()
+    if not stripped:
+        return False
+
+    # Try UUID parse (handles all valid UUIDs robustly)
+    try:
+        uuid.UUID(stripped)
+        return True
+    except ValueError:
+        pass
+
+    # Check timestamped format: mem_{digits}_{8 hex chars}
+    if stripped.lower().startswith("mem_"):
+        parts = stripped.split("_")
+        if len(parts) == 3:
+            _, timestamp, suffix = parts
+            if timestamp.isdigit() and len(suffix) == 8:
+                try:
+                    int(suffix, 16)  # Verify suffix is valid hex
+                    return True
+                except ValueError:
+                    pass
+
+    return False
+
+
+def detect_input_type(value: str) -> Literal["memory_id", "query"]:
+    """Detect whether input is a memory ID or a search query.
+
+    Args:
+        value: The input string to classify
+
+    Returns:
+        'memory_id' if the value matches a memory ID pattern, 'query' otherwise
+    """
+    return "memory_id" if is_memory_id(value) else "query"
+
 
 # LLM prompt for relationship type classification
 RELATIONSHIP_CLASSIFICATION_PROMPT = """You are analyzing the relationship between two memories in a knowledge graph.
