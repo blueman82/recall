@@ -45,8 +45,9 @@ RELATIONSHIP_SIMILARITY_THRESHOLD = 0.6
 # Maximum number of relationships to create per memory store
 MAX_AUTO_RELATIONSHIPS = 5
 
+
 def _is_valid_uuid(value: str) -> bool:
-    """Check if value is a valid UUID."""
+    """Return True if value is a valid UUID."""
     try:
         uuid.UUID(value)
         return True
@@ -55,7 +56,7 @@ def _is_valid_uuid(value: str) -> bool:
 
 
 def _is_timestamped_id(value: str) -> bool:
-    """Check if value matches mem_{timestamp}_{hex8} format."""
+    """Return True if value matches mem_{timestamp}_{hex8} format."""
     parts = value.lower().split("_")
     if len(parts) != 3 or parts[0] != "mem":
         return False
@@ -72,17 +73,18 @@ def _is_timestamped_id(value: str) -> bool:
 
 
 def is_memory_id(value: str) -> bool:
-    """Check if a value matches a memory ID pattern.
+    """Return True if value matches a memory ID pattern.
 
-    Detects two memory ID formats:
-    - UUID: validated via uuid.UUID()
-    - Timestamped: mem_{timestamp}_{hex8} (e.g., mem_1702783200000000_abc12def)
+    Detect two memory ID formats:
+        - UUID: validated via uuid.UUID()
+        - Timestamped: mem_{timestamp}_{hex8}
 
     Args:
-        value: The string to check
+        value: The string to check.
 
     Returns:
-        True if the value matches a memory ID pattern, False otherwise
+        True if the value matches a memory ID pattern, False otherwise.
+
     """
     if not isinstance(value, str) or not (stripped := value.strip()):
         return False
@@ -91,13 +93,14 @@ def is_memory_id(value: str) -> bool:
 
 
 def detect_input_type(value: str) -> Literal["memory_id", "query"]:
-    """Detect whether input is a memory ID or a search query.
+    """Return 'memory_id' or 'query' based on input format.
 
     Args:
-        value: The input string to classify
+        value: The input string to classify.
 
     Returns:
-        'memory_id' if the value matches a memory ID pattern, 'query' otherwise
+        'memory_id' if value matches a memory ID pattern, 'query' otherwise.
+
     """
     return "memory_id" if is_memory_id(value) else "query"
 
