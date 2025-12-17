@@ -296,8 +296,8 @@ def main():
     
     try:
         hook_input = read_hook_input()
-        session_id = hook_input.get("session_id", "unknown")
-        transcript_path = hook_input.get("transcript_path")
+        session_id = hook_input.get("session_id") or hook_input.get("sessionId", "unknown")
+        transcript_path = hook_input.get("transcript_path") or hook_input.get("transcriptPath")
         cwd = hook_input.get("cwd", os.getcwd())
         trigger = hook_input.get("trigger", "unknown")  # "auto" or "manual"
         custom_instructions = hook_input.get("custom_instructions", "")
