@@ -36,6 +36,7 @@ from recall.config import RecallSettings
 from recall.memory.operations import (
     ForgetResult,
     inspect_graph,
+    is_memory_id,
     memory_apply,
     memory_context,
     memory_forget,
