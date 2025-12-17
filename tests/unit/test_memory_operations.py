@@ -2614,6 +2614,205 @@ class TestMemoryForgetIntegration:
 
 
 # ============================================================================
+# Memory ID Detection Tests
+# ============================================================================
+
+
+class TestMemoryIdDetection:
+    """Tests for memory ID detection utilities (is_memory_id and detect_input_type)."""
+
+    # -------------------------------------------------------------------------
+    # UUID4 Detection Tests
+    # -------------------------------------------------------------------------
+
+    def test_is_memory_id_uuid4_lowercase(self):
+        """Verifies lowercase UUID4 format returns True."""
+        # Standard lowercase UUID4
+        assert is_memory_id("550e8400-e29b-41d4-a716-446655440000") is True
+        assert is_memory_id("a1b2c3d4-e5f6-7890-abcd-ef1234567890") is True
+
+    def test_is_memory_id_uuid4_uppercase(self):
+        """Verifies uppercase UUID4 format returns True."""
+        # Standard uppercase UUID4
+        assert is_memory_id("550E8400-E29B-41D4-A716-446655440000") is True
+        assert is_memory_id("A1B2C3D4-E5F6-7890-ABCD-EF1234567890") is True
+
+    def test_is_memory_id_uuid4_mixed_case(self):
+        """Verifies mixed case UUID4 format returns True."""
+        # Mixed case should also work (case-insensitive)
+        assert is_memory_id("550e8400-E29B-41d4-A716-446655440000") is True
+
+    def test_is_memory_id_uuid_without_dashes(self):
+        """Verifies UUID without dashes is accepted (uuid.UUID parses it)."""
+        # UUID without dashes is valid per uuid.UUID() parsing
+        assert is_memory_id("550e8400e29b41d4a716446655440000") is True
+
+    # -------------------------------------------------------------------------
+    # Timestamped Format Detection Tests
+    # -------------------------------------------------------------------------
+
+    def test_is_memory_id_timestamped_format(self):
+        """Verifies mem_timestamp_hex format returns True."""
+        # Timestamped format: mem_{timestamp}_{hex8}
+        assert is_memory_id("mem_1702783200000000_abc12def") is True
+        assert is_memory_id("mem_1700000000000_12345678") is True
+        # Different timestamp lengths (13-19 digits)
+        assert is_memory_id("mem_1702783200000_abcd1234") is True
+        assert is_memory_id("mem_1702783200000000000_abcdef12") is True
+
+    def test_is_memory_id_timestamped_uppercase_hex(self):
+        """Verifies timestamped format with uppercase hex returns True."""
+        assert is_memory_id("MEM_1702783200000000_ABC12DEF") is True
+
+    # -------------------------------------------------------------------------
+    # Empty and Invalid Input Tests
+    # -------------------------------------------------------------------------
+
+    def test_is_memory_id_empty_string(self):
+        """Verifies empty string returns False."""
+        assert is_memory_id("") is False
+
+    def test_is_memory_id_none_handling(self):
+        """Verifies None-like input is handled gracefully."""
+        # The function should handle None by returning False
+        assert is_memory_id(None) is False  # type: ignore[arg-type]
+
+    def test_is_memory_id_whitespace_only(self):
+        """Verifies whitespace-only string returns False."""
+        assert is_memory_id("   ") is False
+        assert is_memory_id("\t\n") is False
+
+    # -------------------------------------------------------------------------
+    # Natural Language Query Rejection Tests
+    # -------------------------------------------------------------------------
+
+    def test_is_memory_id_natural_language_query(self):
+        """Verifies natural language queries return False."""
+        # These should NOT be detected as memory IDs
+        assert is_memory_id("What are user preferences?") is False
+        assert is_memory_id("Find memories about dark mode") is False
+        assert is_memory_id("pytest configuration settings") is False
+        assert is_memory_id("I prefer dark mode") is False
+        assert is_memory_id("user settings and preferences") is False
+
+    def test_is_memory_id_short_text(self):
+        """Verifies short text that isn't an ID returns False."""
+        assert is_memory_id("hello") is False
+        assert is_memory_id("test") is False
+        assert is_memory_id("mem") is False
+
+    # -------------------------------------------------------------------------
+    # Partial and Invalid ID Tests
+    # -------------------------------------------------------------------------
+
+    def test_is_memory_id_partial_uuid(self):
+        """Verifies partial UUIDs return False."""
+        # Missing segments
+        assert is_memory_id("550e8400-e29b-41d4") is False
+        assert is_memory_id("550e8400-e29b") is False
+        # Wrong segment lengths
+        assert is_memory_id("550e840-e29b-41d4-a716-446655440000") is False  # First segment too short
+        assert is_memory_id("550e84000-e29b-41d4-a716-446655440000") is False  # First segment too long
+
+    def test_is_memory_id_invalid_characters_in_uuid(self):
+        """Verifies UUIDs with invalid characters return False."""
+        # Contains 'g' which is not valid hex
+        assert is_memory_id("550e8400-e29b-41d4-a716-44665544000g") is False
+        # Contains special characters
+        assert is_memory_id("550e8400-e29b-41d4-a716-44665544000!") is False
+
+    def test_is_memory_id_partial_timestamped(self):
+        """Verifies partial timestamped IDs return False."""
+        # Missing hex suffix
+        assert is_memory_id("mem_1702783200000000") is False
+        # Missing prefix
+        assert is_memory_id("1702783200000000_abc12def") is False
+        # Wrong prefix
+        assert is_memory_id("memory_1702783200000000_abc12def") is False
+        # Hex suffix wrong length (not 8 chars)
+        assert is_memory_id("mem_1702783200000000_abc12") is False
+        assert is_memory_id("mem_1702783200000000_abc12def00") is False
+
+    def test_is_memory_id_invalid_timestamped_timestamp(self):
+        """Verifies invalid timestamped formats return False."""
+        # Non-digit timestamp
+        assert is_memory_id("mem_notadigit_abc12def") is False
+        # Empty timestamp
+        assert is_memory_id("mem__abc12def") is False
+
+    # -------------------------------------------------------------------------
+    # Whitespace Handling Tests
+    # -------------------------------------------------------------------------
+
+    def test_is_memory_id_with_whitespace(self):
+        """Verifies whitespace-padded IDs still return True."""
+        # Leading/trailing whitespace should be stripped
+        assert is_memory_id("  550e8400-e29b-41d4-a716-446655440000  ") is True
+        assert is_memory_id("\t550e8400-e29b-41d4-a716-446655440000\n") is True
+        assert is_memory_id("  mem_1702783200000000_abc12def  ") is True
+
+    def test_is_memory_id_internal_whitespace(self):
+        """Verifies IDs with internal whitespace return False."""
+        # Internal spaces should fail
+        assert is_memory_id("550e8400 -e29b-41d4-a716-446655440000") is False
+        assert is_memory_id("mem_ 1702783200000000_abc12def") is False
+
+    # -------------------------------------------------------------------------
+    # detect_input_type Tests
+    # -------------------------------------------------------------------------
+
+    def test_detect_input_type_memory_id(self):
+        """Verifies detect_input_type returns 'memory_id' for valid IDs."""
+        # UUID4 format
+        assert detect_input_type("550e8400-e29b-41d4-a716-446655440000") == "memory_id"
+        # Timestamped format
+        assert detect_input_type("mem_1702783200000000_abc12def") == "memory_id"
+        # With whitespace
+        assert detect_input_type("  550e8400-e29b-41d4-a716-446655440000  ") == "memory_id"
+
+    def test_detect_input_type_query(self):
+        """Verifies detect_input_type returns 'query' for non-IDs."""
+        # Natural language
+        assert detect_input_type("What are user preferences?") == "query"
+        assert detect_input_type("dark mode settings") == "query"
+        # Empty/whitespace
+        assert detect_input_type("") == "query"
+        assert detect_input_type("   ") == "query"
+        # Partial IDs
+        assert detect_input_type("550e8400-e29b") == "query"
+        assert detect_input_type("mem_123") == "query"
+
+    # -------------------------------------------------------------------------
+    # Parametrized Tests
+    # -------------------------------------------------------------------------
+
+    @pytest.mark.parametrize("valid_id", [
+        "550e8400-e29b-41d4-a716-446655440000",  # lowercase UUID4
+        "550E8400-E29B-41D4-A716-446655440000",  # uppercase UUID4
+        "mem_1702783200000000_abc12def",          # timestamped lowercase
+        "MEM_1702783200000000_ABC12DEF",          # timestamped uppercase
+        "  550e8400-e29b-41d4-a716-446655440000  ",  # whitespace padded
+    ])
+    def test_is_memory_id_valid_ids_parametrized(self, valid_id):
+        """Parametrized test for valid memory ID formats."""
+        assert is_memory_id(valid_id) is True
+
+    @pytest.mark.parametrize("invalid_input", [
+        "",                                       # empty
+        "   ",                                    # whitespace only
+        "hello world",                            # natural language
+        "What are user preferences?",             # question
+        "550e8400-e29b",                          # partial UUID
+        "mem_123_abc",                            # invalid timestamped (hex too short)
+        "not-a-valid-uuid-at-all",               # random dashes
+        "mem_notadigit_abc12def",                # non-digit timestamp
+    ])
+    def test_is_memory_id_invalid_inputs_parametrized(self, invalid_input):
+        """Parametrized test for invalid memory ID inputs."""
+        assert is_memory_id(invalid_input) is False
+
+
+# ============================================================================
 # Multi-Hop Graph Expansion Tests
 # ============================================================================
 
