@@ -6,6 +6,7 @@ storage and retrieval.
 
 from recall.memory.operations import (
     ForgetResult,
+    StoreResultWithRelations,
     memory_context,
     memory_forget,
     memory_recall,
