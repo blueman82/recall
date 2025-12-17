@@ -669,6 +669,7 @@ async def memory_context_tool(
 async def memory_forget_tool(
     memory_id: Optional[str] = None,
     query: Optional[str] = None,
+    input: Optional[str] = None,
     namespace: Optional[str] = None,
     n_results: int = 5,
     confirm: bool = True,
@@ -680,18 +681,31 @@ async def memory_forget_tool(
     deletion unless force=True is specified.
 
     Args:
-        memory_id: Specific memory ID to delete (direct deletion mode)
-        query: Search query to find memories to delete (search deletion mode)
-        namespace: Filter deletion to specific namespace (optional)
-        n_results: Number of search results to delete in query mode (default: 5)
-        confirm: If True, proceed with deletion (default: True)
-        force: If True, allow deletion of golden rules (default: False)
+        memory_id: Specific memory ID to delete (direct deletion mode).
+        query: Search query to find memories to delete (search deletion mode).
+        input: Smart parameter that auto-detects if value is an ID or query.
+        namespace: Filter deletion to specific namespace (optional).
+        n_results: Number of search results to delete in query mode (default: 5).
+        confirm: If True, proceed with deletion (default: True).
+        force: If True, allow deletion of golden rules (default: False).
 
     Returns:
-        Result dictionary with success status, deleted_ids, and deleted_count
+        Result dictionary with success status, deleted_ids, and deleted_count.
+
+    Note:
+        If both memory_id and query are None but input is provided, the function
+        auto-detects whether input is a memory ID or search query.
+
     """
     if hybrid_store is None:
         return {"success": False, "error": "Server not initialized"}
+
+    # Auto-detect input type if using smart parameter
+    if memory_id is None and query is None and input is not None:
+        if is_memory_id(input):
+            memory_id = input
+        else:
+            query = input
 
     try:
         result = await memory_forget(
