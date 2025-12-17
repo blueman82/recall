@@ -11,6 +11,8 @@ from recall.memory.operations import (
     _compute_content_hash,
     _expand_related_memories,
     _generate_memory_id,
+    detect_input_type,
+    is_memory_id,
     memory_context,
     memory_forget,
     memory_recall,
