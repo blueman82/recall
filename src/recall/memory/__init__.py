@@ -31,6 +31,7 @@ __all__ = [
     "RecallResult",
     "RelationType",
     "StoreResult",
+    "StoreResultWithRelations",
     "memory_context",
     "memory_forget",
     "memory_recall",
