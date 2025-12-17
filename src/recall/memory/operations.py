@@ -64,6 +64,172 @@ Respond with ONLY a JSON object:
 {{"relation": "relates_to|supersedes|caused_by|contradicts|none", "confidence": 0.0-1.0, "reason": "brief explanation"}}"""
 
 
+async def _call_ollama_for_relationship(
+    prompt: str,
+    host: str = "http://localhost:11434",
+    model: str = "llama3.2",
+    timeout: int = 30,
+) -> Optional[dict[str, Any]]:
+    """Call Ollama LLM for relationship classification.
+
+    Args:
+        prompt: The prompt to send to the LLM
+        host: Ollama server host URL
+        model: Model to use for generation
+        timeout: Request timeout in seconds
+
+    Returns:
+        Parsed JSON response or None if failed
+    """
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{host}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "format": "json",
+                },
+            )
+            response.raise_for_status()
+
+            result = response.json()
+            response_text = result.get("response", "")
+
+            try:
+                return json.loads(response_text)
+            except json.JSONDecodeError:
+                json_match = re.search(r'\{[^}]+\}', response_text)
+                if json_match:
+                    return json.loads(json_match.group())
+                logger.warning(f"Failed to parse LLM response as JSON: {response_text}")
+                return None
+
+    except httpx.HTTPError as e:
+        logger.debug(f"HTTP error calling Ollama LLM for relationship: {e}")
+        return None
+    except Exception as e:
+        logger.debug(f"Error calling Ollama LLM for relationship: {e}")
+        return None
+
+
+async def _infer_relationships(
+    store: HybridStore,
+    memory_id: str,
+    content: str,
+    namespace: str,
+    similarity_threshold: float = RELATIONSHIP_SIMILARITY_THRESHOLD,
+    max_relationships: int = MAX_AUTO_RELATIONSHIPS,
+    ollama_host: str = "http://localhost:11434",
+    ollama_model: str = "llama3.2",
+) -> list[dict[str, Any]]:
+    """Automatically infer and create relationships to existing memories.
+
+    Searches for semantically similar memories and uses LLM to classify
+    the relationship type, then creates edges automatically.
+
+    Args:
+        store: HybridStore instance
+        memory_id: ID of the newly stored memory
+        content: Content of the new memory
+        namespace: Namespace to search within
+        similarity_threshold: Minimum similarity to consider (default: 0.6)
+        max_relationships: Maximum edges to create (default: 5)
+        ollama_host: Ollama server host
+        ollama_model: Model for relationship classification
+
+    Returns:
+        List of created relationship dicts with target_id, relation, and reason
+    """
+    created_relationships: list[dict[str, Any]] = []
+
+    try:
+        similar_memories = await store.search(
+            query=content,
+            n_results=max_relationships + 5,
+            namespace=namespace,
+        )
+    except Exception as e:
+        logger.debug(f"Failed to search for similar memories: {e}")
+        return created_relationships
+
+    candidates = [
+        mem for mem in similar_memories
+        if mem["id"] != memory_id and mem.get("similarity", 0.0) >= similarity_threshold
+    ]
+
+    if not candidates:
+        return created_relationships
+
+    for candidate in candidates[:max_relationships + 2]:
+        if len(created_relationships) >= max_relationships:
+            break
+
+        candidate_content = candidate.get("content", "")
+        candidate_id = candidate["id"]
+
+        prompt = RELATIONSHIP_CLASSIFICATION_PROMPT.format(
+            new_memory=content,
+            existing_memory=candidate_content,
+        )
+
+        llm_result = await _call_ollama_for_relationship(
+            prompt=prompt,
+            host=ollama_host,
+            model=ollama_model,
+        )
+
+        if not llm_result:
+            continue
+
+        relation = llm_result.get("relation", "none")
+        confidence = llm_result.get("confidence", 0.0)
+        reason = llm_result.get("reason", "")
+
+        if relation == "none" or confidence < 0.5:
+            continue
+
+        try:
+            rel_type = RelationType(relation)
+        except ValueError:
+            rel_type = RelationType.RELATES_TO
+
+        try:
+            existing_edges = store.get_edges(memory_id, direction="outgoing", edge_type=rel_type.value)
+            edge_exists = any(e["target_id"] == candidate_id for e in existing_edges)
+
+            if not edge_exists:
+                store.add_edge(
+                    source_id=memory_id,
+                    target_id=candidate_id,
+                    edge_type=rel_type.value,
+                    weight=confidence,
+                    metadata={"reason": reason, "auto_inferred": True},
+                )
+
+                if rel_type == RelationType.SUPERSEDES:
+                    current_importance = candidate.get("importance", 0.5)
+                    await store.update_memory(candidate_id, importance=current_importance * 0.5)
+
+                created_relationships.append({
+                    "target_id": candidate_id,
+                    "relation": rel_type.value,
+                    "confidence": confidence,
+                    "reason": reason,
+                })
+
+                logger.info(
+                    f"Auto-created {rel_type.value} edge: {memory_id} -> {candidate_id} "
+                    f"(confidence: {confidence:.2f}, reason: {reason})"
+                )
+
+        except Exception as e:
+            logger.debug(f"Failed to create edge {memory_id} -> {candidate_id}: {e}")
+
+    return created_relationships
+
+
 def _generate_memory_id() -> str:
     """Generate a globally unique memory ID using UUID4.
 
