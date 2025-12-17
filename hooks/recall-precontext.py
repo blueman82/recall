@@ -264,8 +264,8 @@ def main():
         # Read hook input from stdin
         hook_input = read_hook_input()
 
-        tool_name = hook_input.get("tool_name", "")
-        tool_input = hook_input.get("tool_input", {})
+        tool_name = hook_input.get("tool_name") or hook_input.get("toolName", "")
+        tool_input = hook_input.get("tool_input") or hook_input.get("toolInput", {})
         cwd = hook_input.get("cwd")
 
         # Change to session's working directory if provided
