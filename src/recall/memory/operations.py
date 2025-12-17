@@ -253,6 +253,16 @@ def _compute_content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
 
+@dataclass
+class StoreResultWithRelations(StoreResult):
+    """Extended StoreResult that includes auto-inferred relationships.
+
+    Attributes:
+        auto_relationships: List of automatically created relationships
+    """
+    auto_relationships: list[dict[str, Any]] = field(default_factory=list)
+
+
 async def memory_store(
     store: HybridStore,
     content: str,
@@ -261,14 +271,23 @@ async def memory_store(
     importance: float = 0.5,
     metadata: Optional[dict[str, Any]] = None,
     relations: Optional[list[dict[str, str]]] = None,
+    ollama_host: str = "http://localhost:11434",
+    ollama_model: str = "llama3.2",
 ) -> StoreResult:
-    """Store a new memory with semantic indexing, deduplication, and optional relations.
+    """Store a new memory with semantic indexing, deduplication, and automatic relationship inference.
 
     Handles the complete memory storage workflow:
     1. Generate unique ID and content hash
     2. Check for duplicate content in the namespace
     3. Store via HybridStore (SQLite + ChromaDB with embeddings)
-    4. Optionally create edges to related memories
+    4. Automatically infer and create relationships to existing memories via LLM
+    5. Optionally create additional manual edges
+
+    The automatic relationship inference:
+    - Searches for semantically similar existing memories (threshold: 0.6)
+    - Uses LLM to classify relationship type (relates_to, supersedes, caused_by, contradicts)
+    - Creates up to 5 edges automatically per stored memory
+    - Runs in the background - failures don't affect memory storage
 
     Args:
         store: HybridStore instance for storage operations
@@ -277,10 +296,13 @@ async def memory_store(
         namespace: Scope of the memory ('global' or 'project:{name}')
         importance: Importance score from 0.0 to 1.0 (default: 0.5)
         metadata: Optional additional metadata as dict
-        relations: Optional list of dicts with {target_id, relation} to create edges
+        relations: Optional list of dicts with {target_id, relation} for manual edges
+        ollama_host: Ollama server host for LLM relationship inference
+        ollama_model: Model to use for relationship classification
 
     Returns:
-        StoreResult with success status, memory id (if successful), or error message
+        StoreResultWithRelations with success status, memory id, content_hash,
+        and auto_relationships list showing inferred edges
 
     Example:
         >>> store = await HybridStore.create(ephemeral=True)
@@ -293,13 +315,14 @@ async def memory_store(
         ... )
         >>> if result.success:
         ...     print(f"Stored memory: {result.id}")
+        ...     print(f"Auto-created {len(result.auto_relationships)} relationships")
     """
     # Validate inputs
     if not content or not content.strip():
-        return StoreResult(success=False, error="Content cannot be empty")
+        return StoreResultWithRelations(success=False, error="Content cannot be empty")
 
     if not 0.0 <= importance <= 1.0:
-        return StoreResult(
+        return StoreResultWithRelations(
             success=False,
             error=f"Importance must be between 0.0 and 1.0, got {importance}",
         )
@@ -308,15 +331,11 @@ async def memory_store(
     content_hash = _compute_content_hash(content)
 
     # Check for existing memory with same content hash in the namespace
-    # Query SQLite directly through the HybridStore's internal SQLite store
-    # SQLite stores full SHA-256 (64 chars), we compare with truncated (16 chars)
     existing_memories = store.list_memories(namespace=namespace, limit=1000)
     for memory in existing_memories:
         stored_hash = memory.get("content_hash", "")
-        # Compare truncated hashes - SQLite stores full 64-char hash
         if stored_hash.startswith(content_hash) or stored_hash == content_hash:
-            # Duplicate found - return existing ID with content_hash
-            return StoreResult(
+            return StoreResultWithRelations(
                 success=True,
                 id=memory["id"],
                 content_hash=content_hash,
@@ -339,11 +358,21 @@ async def memory_store(
             memory_id=memory_id,
         )
 
-        # Create edges for relations if provided
+        # Automatically infer and create relationships to existing memories
+        auto_relationships = await _infer_relationships(
+            store=store,
+            memory_id=stored_id,
+            content=content,
+            namespace=namespace,
+            ollama_host=ollama_host,
+            ollama_model=ollama_model,
+        )
+
+        # Create edges for manually specified relations if provided
         if relations:
             for relation in relations:
                 target_id = relation.get("target_id")
-                relation_type = relation.get("relation", "related")
+                relation_type = relation.get("relation", "relates_to")
 
                 if target_id:
                     try:
@@ -352,17 +381,20 @@ async def memory_store(
                             target_id=target_id,
                             edge_type=relation_type,
                         )
-                    except Exception as e:
-                        # Log but don't fail the whole operation for edge creation failures
-                        # The memory was already stored successfully
+                    except Exception:
                         pass
 
-        return StoreResult(success=True, id=stored_id, content_hash=content_hash)
+        return StoreResultWithRelations(
+            success=True,
+            id=stored_id,
+            content_hash=content_hash,
+            auto_relationships=auto_relationships,
+        )
 
     except ValueError as e:
-        return StoreResult(success=False, error=str(e))
+        return StoreResultWithRelations(success=False, error=str(e))
     except Exception as e:
-        return StoreResult(success=False, error=f"Failed to store memory: {e}")
+        return StoreResultWithRelations(success=False, error=f"Failed to store memory: {e}")
 
 
 def _dict_to_memory(data: dict[str, Any]) -> Memory:
