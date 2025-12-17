@@ -182,16 +182,23 @@ def main():
         memories = []
         if result.get("success"):
             memories = result.get("memories", [])
+            # Include graph-expanded memories
+            for expanded in result.get("expanded", []):
+                memories.append(expanded)
         
-        # Also check global namespace
+        # Also check global namespace with graph expansion
         if namespace != "global":
             global_result = call_recall("memory_recall_tool", {
                 "query": query,
                 "n_results": 5,
                 "namespace": "global",
+                "include_related": True,
+                "max_depth": 1,
             })
             if global_result.get("success"):
                 memories.extend(global_result.get("memories", []))
+                for expanded in global_result.get("expanded", []):
+                    memories.append(expanded)
         
         # Format and output context
         context = format_context(memories, prompt)

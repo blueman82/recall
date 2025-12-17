@@ -137,45 +137,96 @@ def call_recall(tool_name: str, args: dict) -> dict:
         return {"success": False, "error": str(e)}
 
 
-def fetch_raw_memories(project_namespace: str) -> list[dict]:
-    """Fetch raw memories from both project and global namespaces.
+def fetch_raw_memories(project_namespace: str, project_name: str) -> list[dict]:
+    """Fetch raw memories using semantic search with graph expansion.
+
+    Uses memory_recall with include_related=True to leverage graph relationships,
+    finding not just directly relevant memories but also related ones via edges.
 
     Args:
         project_namespace: The project namespace (e.g., 'project:recall')
+        project_name: The project name for semantic search context
 
     Returns:
         List of memory dicts with type, content, importance, confidence
     """
     all_memories = []
+    seen_ids = set()
 
-    # Fetch project memories
-    project_result = call_recall("memory_list", {
+    # Phase 1: Semantic search with graph expansion for project memories
+    # Use project name as query to find contextually relevant memories
+    project_result = call_recall("memory_recall", {
+        "query": f"{project_name} project context preferences patterns decisions workflows",
         "namespace": project_namespace,
-        "limit": 50,
-        "order_by": "importance",
-        "descending": True,
+        "n_results": 20,
+        "include_related": True,
+        "max_depth": 2,
+        "max_expanded": 30,
+        "decay_factor": 0.7,
     })
-    if project_result.get("success") and project_result.get("memories"):
-        for mem in project_result["memories"]:
-            mem["_source"] = "project"
-        all_memories.extend(project_result["memories"])
 
-    # Fetch global memories (preferences and golden rules)
-    global_result = call_recall("memory_list", {
-        "namespace": "global",
-        "limit": 30,
+    if project_result.get("success"):
+        # Add primary memories
+        for mem in project_result.get("memories", []):
+            if mem["id"] not in seen_ids:
+                mem["_source"] = "project"
+                mem["_via_graph"] = False
+                all_memories.append(mem)
+                seen_ids.add(mem["id"])
+
+        # Add expanded memories (discovered via graph traversal)
+        for expanded in project_result.get("expanded", []):
+            if expanded["id"] not in seen_ids:
+                expanded["_source"] = "project (via graph)"
+                expanded["_via_graph"] = True
+                expanded["_relevance"] = expanded.get("relevance_score", 0.5)
+                expanded["_path"] = expanded.get("path", [])
+                all_memories.append(expanded)
+                seen_ids.add(expanded["id"])
+
+    # Phase 2: Also fetch high-importance project memories that might not match query
+    project_list_result = call_recall("memory_list", {
+        "namespace": project_namespace,
+        "limit": 20,
         "order_by": "importance",
         "descending": True,
     })
-    if global_result.get("success") and global_result.get("memories"):
-        # Only include universal global memories (preferences and golden rules)
-        # Skip patterns/decisions - they're usually context-specific incidents
-        for mem in global_result["memories"]:
+    if project_list_result.get("success"):
+        for mem in project_list_result.get("memories", []):
+            if mem["id"] not in seen_ids:
+                mem["_source"] = "project"
+                mem["_via_graph"] = False
+                all_memories.append(mem)
+                seen_ids.add(mem["id"])
+
+    # Phase 3: Global memories with graph expansion (preferences and golden rules)
+    global_result = call_recall("memory_recall", {
+        "query": "user preferences coding style golden rules requirements",
+        "namespace": "global",
+        "n_results": 15,
+        "include_related": True,
+        "max_depth": 1,
+        "max_expanded": 15,
+    })
+
+    if global_result.get("success"):
+        for mem in global_result.get("memories", []):
             mem_type = mem.get("type", "")
             # Only preferences and golden rules apply across all projects
-            if mem_type in ("preference", "golden_rule"):
+            if mem_type in ("preference", "golden_rule") and mem["id"] not in seen_ids:
                 mem["_source"] = "global"
+                mem["_via_graph"] = False
                 all_memories.append(mem)
+                seen_ids.add(mem["id"])
+
+        # Include expanded global memories if they're preferences/golden rules
+        for expanded in global_result.get("expanded", []):
+            exp_type = expanded.get("type", "")
+            if exp_type in ("preference", "golden_rule") and expanded["id"] not in seen_ids:
+                expanded["_source"] = "global (via graph)"
+                expanded["_via_graph"] = True
+                all_memories.append(expanded)
+                seen_ids.add(expanded["id"])
 
     return all_memories
 
@@ -358,8 +409,8 @@ def main():
         # Determine project namespace
         namespace, project_name = get_project_namespace()
 
-        # Phase 1: Fetch raw memories
-        memories = fetch_raw_memories(namespace)
+        # Phase 1: Fetch raw memories with graph expansion
+        memories = fetch_raw_memories(namespace, project_name)
 
         if not memories:
             # No memories to show
