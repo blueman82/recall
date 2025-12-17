@@ -289,13 +289,13 @@ plan:
           imports: ["recall.memory.operations.is_memory_id"]
       verification:
         automated_tests:
-          command: "cd /Users/harrison/Documents/Github/recall-forget-id-detection && python -c \"from recall.__main__ import memory_forget_tool; import inspect; sig = inspect.signature(memory_forget_tool); assert 'input' in sig.parameters\""
+          command: "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -c \"from recall.__main__ import memory_forget_tool; import inspect; sig = inspect.signature(memory_forget_tool); assert 'input' in sig.parameters\""
           expected_output: "No assertion error"
       code_quality:
         python:
           full_quality_pipeline:
             command: |
-              cd /Users/harrison/Documents/Github/recall-forget-id-detection && python -c "from recall.__main__ import memory_forget_tool; print('Import successful')"
+              cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -c "from recall.__main__ import memory_forget_tool; print('Import successful')"
             exit_on_failure: true
       commit:
         type: "feat"
