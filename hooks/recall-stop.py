@@ -174,8 +174,8 @@ def main():
     """
     try:
         hook_input = read_hook_input()
-        session_id = hook_input.get("session_id", "unknown")
-        transcript_path = hook_input.get("transcript_path")
+        session_id = hook_input.get("session_id") or hook_input.get("sessionId", "unknown")
+        transcript_path = hook_input.get("transcript_path") or hook_input.get("transcriptPath")
         cwd = hook_input.get("cwd", os.getcwd())
         stop_hook_active = hook_input.get("stop_hook_active", False)
         
