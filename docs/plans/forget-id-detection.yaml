@@ -97,20 +97,19 @@ plan:
         integration: {}
       verification:
         automated_tests:
-          command: "cd /Users/harrison/Documents/Github/recall-forget-id-detection && python -m pytest tests/unit/test_memory_operations.py -k 'TestMemoryIdDetection' -v"
+          command: "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -m pytest tests/unit/test_memory_operations.py -k 'TestMemoryIdDetection' -v"
           expected_output: "All TestMemoryIdDetection tests pass"
       code_quality:
         python:
           full_quality_pipeline:
             command: |
-              cd /Users/harrison/Documents/Github/recall-forget-id-detection && python -m pytest tests/unit/test_memory_operations.py -k 'TestMemoryIdDetection' -v
+              cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -m pytest tests/unit/test_memory_operations.py -k 'TestMemoryIdDetection' -v
             exit_on_failure: true
       commit:
         type: "feat"
         message: "add is_memory_id and detect_input_type utility functions"
         files:
           - "src/recall/memory/operations.py"
-      status: "failed"
     # ─────────────────────────────────────────────────────────────
     # Task 2: Add Unit Tests for ID Detection
     # ─────────────────────────────────────────────────────────────
