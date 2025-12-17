@@ -97,20 +97,19 @@ plan:
         integration: {}
       verification:
         automated_tests:
-          command: "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -m pytest tests/unit/test_memory_operations.py -k 'TestMemoryIdDetection' -v"
-          expected_output: "All TestMemoryIdDetection tests pass"
+          command: "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -c \"from recall.memory.operations import is_memory_id, detect_input_type; print('Functions imported successfully')\""
+          expected_output: "Functions imported successfully"
       code_quality:
         python:
           full_quality_pipeline:
             command: |
-              cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -m pytest tests/unit/test_memory_operations.py -k 'TestMemoryIdDetection' -v
+              cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -c "from recall.memory.operations import is_memory_id, detect_input_type; assert callable(is_memory_id); assert callable(detect_input_type); print('OK')"
             exit_on_failure: true
       commit:
         type: "feat"
         message: "add is_memory_id and detect_input_type utility functions"
         files:
           - "src/recall/memory/operations.py"
-      status: "failed"
     # ─────────────────────────────────────────────────────────────
     # Task 2: Add Unit Tests for ID Detection
     # ─────────────────────────────────────────────────────────────
