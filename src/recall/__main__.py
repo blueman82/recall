@@ -228,7 +228,11 @@ async def memory_store_tool(
     importance: float = 0.5,
     metadata: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    """Store a new memory with semantic indexing and deduplication.
+    """Store a new memory with semantic indexing, deduplication, and automatic relationship inference.
+
+    Automatically finds semantically similar existing memories and creates
+    relationship edges using LLM classification. This builds the knowledge
+    graph automatically - no manual edge creation needed.
 
     Args:
         content: The memory content text
@@ -238,7 +242,16 @@ async def memory_store_tool(
         metadata: Optional additional metadata as dict
 
     Returns:
-        Result dictionary with success status, memory id, and content_hash
+        Result dictionary with:
+        - success: Boolean indicating operation success
+        - id: Memory ID (if successful)
+        - content_hash: Content hash for deduplication
+        - auto_relationships: List of automatically inferred relationships, each with:
+            - target_id: ID of the related memory
+            - relation: Relationship type (relates_to, supersedes, caused_by, contradicts)
+            - confidence: LLM confidence in the relationship (0.0-1.0)
+            - reason: Brief explanation of why the relationship was created
+        - error: Error message (if failed)
     """
     if hybrid_store is None:
         return {"success": False, "error": "Server not initialized"}
@@ -263,10 +276,14 @@ async def memory_store_tool(
             metadata=metadata,
         )
 
+        # Include auto_relationships in response
+        auto_relationships = getattr(result, 'auto_relationships', [])
+
         return {
             "success": result.success,
             "id": result.id,
             "content_hash": result.content_hash,
+            "auto_relationships": auto_relationships,
             "error": result.error,
         }
 
