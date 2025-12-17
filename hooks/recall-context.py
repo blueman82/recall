@@ -115,7 +115,7 @@ def call_recall(tool_name: str, args: dict) -> dict:
             cmd,
             capture_output=True,
             text=True,
-            timeout=5,  # Reduced timeout to leave room for Ollama
+            timeout=8,  # Graph expansion needs more time
             cwd=recall_dir or Path.cwd(),
         )
 

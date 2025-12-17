@@ -95,7 +95,7 @@ def call_recall(tool_name: str, args: dict) -> dict:
         else:
             cmd = ["uv", "run", "--directory", str(recall_dir), "python", "-m", "recall", "--call", tool_name, "--args", json.dumps(args)]
         
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3, cwd=recall_dir or Path.cwd())
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, cwd=recall_dir or Path.cwd())
         
         if result.returncode != 0:
             return {"success": False, "error": f"recall failed: {result.stderr}"}

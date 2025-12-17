@@ -176,7 +176,7 @@ def call_recall(tool_name: str, args: dict) -> dict:
             cmd,
             capture_output=True,
             text=True,
-            timeout=3,  # Short timeout for pre-tool hooks
+            timeout=5,  # Graph expansion needs more time
             cwd=recall_dir or Path.cwd(),
         )
 
