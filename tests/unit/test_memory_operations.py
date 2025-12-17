@@ -366,7 +366,7 @@ class TestMemoryStore:
 
     @pytest.mark.asyncio
     async def test_memory_store_relations_use_default_type(self, mock_store):
-        """Test that relations default to 'related' edge type."""
+        """Test that relations default to 'relates_to' edge type."""
         relations = [
             {"target_id": "target_mem"},  # No relation type specified
         ]
@@ -380,7 +380,7 @@ class TestMemoryStore:
         assert result.success is True
         mock_store.add_edge.assert_called_once()
         call_kwargs = mock_store.add_edge.call_args.kwargs
-        assert call_kwargs["edge_type"] == "related"
+        assert call_kwargs["edge_type"] == "relates_to"
 
     @pytest.mark.asyncio
     async def test_memory_store_relation_failure_non_fatal(self, mock_store):
