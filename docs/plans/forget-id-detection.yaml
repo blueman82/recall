@@ -331,6 +331,8 @@ plan:
       description: |
         ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
         ```bash
+        # Ensure uv environment is set up
+        cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv sync
         # Verify Task 3 completed - input param exists
         grep -n "input:" src/recall/__main__.py | head -5
         # Verify forget.md exists
