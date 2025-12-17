@@ -42,8 +42,20 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
+
+
+def run_background(data_file: str) -> None:
+    """Background worker - does actual capture work."""
+    try:
+        with open(data_file) as f:
+            hook_input = json.load(f)
+        os.unlink(data_file)
+        _do_capture(hook_input)
+    except Exception:
+        pass
 
 
 def read_hook_input() -> dict:
@@ -372,53 +384,39 @@ def store_memories(memories: list, namespace: str) -> tuple[int, int]:
     return stored, skipped
 
 
-def main():
-    """Main hook entry point.
-
-    Reads transcript, summarizes with Ollama, and stores memories.
-    All errors are caught to prevent blocking Claude Code.
-    """
+def _do_capture(hook_input: dict) -> None:
+    """Actual capture work - runs in background."""
     from datetime import datetime
 
-    # Read hook input from stdin (supports both Claude Code snake_case and Factory camelCase)
-    hook_input = read_hook_input()
     session_id = hook_input.get("session_id") or hook_input.get("sessionId", "unknown")
     transcript_path = hook_input.get("transcript_path") or hook_input.get("transcriptPath")
     cwd = hook_input.get("cwd", os.getcwd())
 
-    # Log hook invocation for verification
     log_path = Path.home() / ".claude" / "hooks" / "logs" / "recall-capture.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "a") as f:
-        f.write(f"{datetime.now().isoformat()} | SessionEnd fired | session={session_id} | transcript={transcript_path}\n")
 
     try:
-        # Read session transcript
-        transcript = read_transcript(transcript_path)
+        with open(log_path, "a") as f:
+            f.write(f"{datetime.now().isoformat()} | SessionEnd fired | session={session_id} | transcript={transcript_path}\n")
 
+        transcript = read_transcript(transcript_path)
         if not transcript or len(transcript) < 100:
-            # No meaningful transcript to process
             with open(log_path, "a") as f:
                 f.write(f"{datetime.now().isoformat()} | No transcript or too short | len={len(transcript) if transcript else 0}\n")
             return
 
-        # Determine project namespace using cwd from hook input
-        os.chdir(cwd)  # Change to session's working directory
+        os.chdir(cwd)
         namespace = get_project_namespace()
 
         with open(log_path, "a") as f:
             f.write(f"{datetime.now().isoformat()} | Processing transcript | len={len(transcript)} | namespace={namespace}\n")
 
-        # Summarize with Ollama
         summary_json = summarize_with_ollama(transcript)
-
         if not summary_json:
-            # Ollama not available or failed - skip silently
             with open(log_path, "a") as f:
                 f.write(f"{datetime.now().isoformat()} | Ollama summarization failed\n")
             return
 
-        # Parse memories
         try:
             memories = json.loads(summary_json)
             if not isinstance(memories, list):
@@ -433,20 +431,44 @@ def main():
                 f.write(f"{datetime.now().isoformat()} | No memories extracted\n")
             return
 
-        # Store memories (with deduplication)
         stored, skipped = store_memories(memories, namespace)
 
-        # Log result
         with open(log_path, "a") as f:
             f.write(f"{datetime.now().isoformat()} | Stored {stored} memories, skipped {skipped} duplicates from session {session_id}\n")
 
-    except BrokenPipeError:
-        # Claude Code closed connection before we finished - this is fine
-        pass
     except Exception as e:
-        # Log error but don't block Claude Code
-        with open(log_path, "a") as f:
-            f.write(f"{datetime.now().isoformat()} | ERROR: {e}\n")
+        try:
+            with open(log_path, "a") as f:
+                f.write(f"{datetime.now().isoformat()} | ERROR: {e}\n")
+        except Exception:
+            pass
+
+
+def main():
+    """Main hook entry point - fire and forget."""
+    # Handle background mode
+    if len(sys.argv) > 2 and sys.argv[1] == "--background":
+        run_background(sys.argv[2])
+        return
+
+    hook_input = read_hook_input()
+    if not hook_input:
+        return
+
+    try:
+        fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="recall-capture-")
+        with os.fdopen(fd, "w") as f:
+            json.dump(hook_input, f)
+
+        subprocess.Popen(
+            [sys.executable, __file__, "--background", temp_path],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+    except Exception:
+        _do_capture(hook_input)
 
 
 if __name__ == "__main__":

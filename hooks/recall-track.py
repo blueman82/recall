@@ -42,8 +42,20 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
+
+
+def run_background(data_file: str) -> None:
+    """Background worker - does actual tracking work."""
+    try:
+        with open(data_file) as f:
+            hook_input = json.load(f)
+        os.unlink(data_file)  # Clean up temp file
+        _do_tracking(hook_input)
+    except Exception:
+        pass
 
 
 def read_hook_input() -> dict:
@@ -289,21 +301,13 @@ def track_mcp_activity(tool_name: str, tool_input: dict, tool_response: dict, se
         f.write(f"{datetime.now().isoformat()} | mcp | server={server} | tool={mcp_tool}\n")
 
 
-def main():
-    """Main hook entry point.
-
-    Reads tool call data, extracts relevant info, and stores activity.
-    All errors are caught to prevent blocking the agent.
-    """
+def _do_tracking(hook_input: dict) -> None:
+    """Actual tracking work - runs in background."""
     from datetime import datetime
 
-    # Supported tools
     FILE_TOOLS = {"Read", "Write", "Edit", "MultiEdit"}
     SEARCH_TOOLS = {"Glob", "Grep"}
     WEB_TOOLS = {"WebFetch", "WebSearch"}
-
-    # Read hook input from stdin
-    hook_input = read_hook_input()
 
     tool_name = hook_input.get("tool_name") or hook_input.get("toolName", "")
     tool_input = hook_input.get("tool_input") or hook_input.get("toolInput", {})
@@ -311,40 +315,62 @@ def main():
     session_id = hook_input.get("session_id") or hook_input.get("sessionId")
     cwd = hook_input.get("cwd", os.getcwd())
 
-    # Log hook invocation for debugging
     log_path = Path.home() / ".claude" / "hooks" / "logs" / "recall-track.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Route to appropriate tracker based on tool type
         if tool_name in FILE_TOOLS:
             track_file_activity(tool_name, tool_input, session_id, cwd, log_path)
-
         elif tool_name in SEARCH_TOOLS:
             track_search_activity(tool_name, tool_input, session_id, cwd, log_path)
-
         elif tool_name in WEB_TOOLS:
             track_web_activity(tool_name, tool_input, tool_response, session_id, log_path)
-
         elif tool_name == "Task":
             track_task_activity(tool_input, tool_response, session_id, log_path)
-
         elif tool_name == "Bash":
             track_bash_activity(tool_input, tool_response, session_id, log_path)
-
         elif tool_name.startswith("mcp__"):
             track_mcp_activity(tool_name, tool_input, tool_response, session_id, log_path)
-
-    except BrokenPipeError:
-        # Agent closed connection - this is fine
-        pass
     except Exception as e:
-        # Log error but don't block the agent
         try:
             with open(log_path, "a") as f:
                 f.write(f"{datetime.now().isoformat()} | ERROR: {e}\n")
         except Exception:
             pass
+
+
+def main():
+    """Main hook entry point - fire and forget.
+
+    Reads stdin, spawns background worker, exits immediately.
+    """
+    # Handle background mode
+    if len(sys.argv) > 2 and sys.argv[1] == "--background":
+        run_background(sys.argv[2])
+        return
+
+    # Read hook input from stdin (must be done synchronously)
+    hook_input = read_hook_input()
+    if not hook_input:
+        return
+
+    # Write to temp file and spawn background worker
+    try:
+        fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="recall-track-")
+        with os.fdopen(fd, "w") as f:
+            json.dump(hook_input, f)
+
+        # Fire and forget - spawn detached process
+        subprocess.Popen(
+            [sys.executable, __file__, "--background", temp_path],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+    except Exception:
+        # Fallback to sync if background spawn fails
+        _do_tracking(hook_input)
 
 
 if __name__ == "__main__":
