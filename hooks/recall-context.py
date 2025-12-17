@@ -305,7 +305,7 @@ OUTPUT:"""
             input=prompt,
             capture_output=True,
             text=True,
-            timeout=6,  # Leave headroom within 10s hook timeout
+            timeout=12,  # Leave headroom within 20s hook timeout
         )
 
         if result.returncode != 0:
@@ -405,32 +405,48 @@ def main():
 
     All errors are caught to prevent blocking Claude Code.
     """
+    from datetime import datetime
+    log_path = Path.home() / ".claude" / "hooks" / "logs" / "recall-context.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    def log(msg):
+        with open(log_path, "a") as f:
+            f.write(f"{datetime.now().isoformat()} | {msg}\n")
+    
+    log("SessionStart hook triggered")
+    
     try:
         # Determine project namespace
         namespace, project_name = get_project_namespace()
+        log(f"namespace={namespace} project={project_name}")
 
         # Phase 1: Fetch raw memories with graph expansion
         memories = fetch_raw_memories(namespace, project_name)
+        log(f"fetched {len(memories)} memories")
 
         if not memories:
-            # No memories to show
+            log("no memories, exiting")
             return
 
-        # Phase 2: Curate with Ollama
+        # Phase 2: Curate with Ollama (warm model via OLLAMA_KEEP_ALIVE=24h)
         context = curate_with_ollama(memories, project_name)
+        log(f"ollama curated: {len(context) if context else 0} chars")
 
         # Fallback if Ollama fails
         if not context:
             context = fallback_context(memories)
+            log(f"fallback context: {len(context) if context else 0} chars")
 
         if context and context.strip():
+            log("outputting context to stdout")
             print(context)
             print()
             print("---")
             print("**Memory tip:** When you notice user preferences, technical decisions, or patterns worth remembering, use `memory_store_tool` to save them.")
+            log("done")
 
     except Exception as e:
-        # Silently fail - don't block Claude Code
+        log(f"ERROR: {e}")
         print(f"<!-- recall-context hook error: {e} -->", file=sys.stderr)
 
 
