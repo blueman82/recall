@@ -45,14 +45,38 @@ RELATIONSHIP_SIMILARITY_THRESHOLD = 0.6
 # Maximum number of relationships to create per memory store
 MAX_AUTO_RELATIONSHIPS = 5
 
+def _is_valid_uuid(value: str) -> bool:
+    """Check if value is a valid UUID."""
+    try:
+        uuid.UUID(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_timestamped_id(value: str) -> bool:
+    """Check if value matches mem_{timestamp}_{hex8} format."""
+    parts = value.lower().split("_")
+    if len(parts) != 3 or parts[0] != "mem":
+        return False
+
+    timestamp, suffix = parts[1], parts[2]
+    if not timestamp.isdigit() or len(suffix) != 8:
+        return False
+
+    try:
+        int(suffix, 16)
+        return True
+    except ValueError:
+        return False
+
+
 def is_memory_id(value: str) -> bool:
     """Check if a value matches a memory ID pattern.
 
     Detects two memory ID formats:
-    - UUID4: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (validated via uuid.UUID)
+    - UUID: validated via uuid.UUID()
     - Timestamped: mem_{timestamp}_{hex8} (e.g., mem_1702783200000000_abc12def)
-
-    Uses stdlib uuid parsing instead of regex for robustness.
 
     Args:
         value: The string to check
@@ -60,33 +84,10 @@ def is_memory_id(value: str) -> bool:
     Returns:
         True if the value matches a memory ID pattern, False otherwise
     """
-    if not value or not isinstance(value, str):
+    if not isinstance(value, str) or not (stripped := value.strip()):
         return False
 
-    stripped = value.strip()
-    if not stripped:
-        return False
-
-    # Try UUID parse (handles all valid UUIDs robustly)
-    try:
-        uuid.UUID(stripped)
-        return True
-    except ValueError:
-        pass
-
-    # Check timestamped format: mem_{digits}_{8 hex chars}
-    if stripped.lower().startswith("mem_"):
-        parts = stripped.split("_")
-        if len(parts) == 3:
-            _, timestamp, suffix = parts
-            if timestamp.isdigit() and len(suffix) == 8:
-                try:
-                    int(suffix, 16)  # Verify suffix is valid hex
-                    return True
-                except ValueError:
-                    pass
-
-    return False
+    return _is_valid_uuid(stripped) or _is_timestamped_id(stripped)
 
 
 def detect_input_type(value: str) -> Literal["memory_id", "query"]:
