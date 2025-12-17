@@ -136,10 +136,12 @@ plan:
         - "No unused variables."
         - "All imports from dependency tasks resolve."
       test_commands:
-        - "cd /Users/harrison/Documents/Github/recall-forget-id-detection && python -m pytest tests/unit/test_memory_operations.py -k 'TestMemoryIdDetection' -v"
+        - "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -m pytest tests/unit/test_memory_operations.py -k 'TestMemoryIdDetection' -v"
       description: |
         ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
         ```bash
+        # Ensure uv environment is set up
+        cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv sync
         # Verify Task 1 completed - functions exist
         grep -n "def is_memory_id" src/recall/memory/operations.py
         grep -n "def detect_input_type" src/recall/memory/operations.py
