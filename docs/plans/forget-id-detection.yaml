@@ -237,10 +237,12 @@ plan:
         - "No unused variables."
         - "All imports from dependency tasks resolve."
       test_commands:
-        - "cd /Users/harrison/Documents/Github/recall-forget-id-detection && python -c \"from recall.__main__ import memory_forget_tool; import inspect; sig = inspect.signature(memory_forget_tool); assert 'input' in sig.parameters, 'input param missing'\""
+        - "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -c \"from recall.__main__ import memory_forget_tool; import inspect; sig = inspect.signature(memory_forget_tool); assert 'input' in sig.parameters, 'input param missing'\""
       description: |
         ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
         ```bash
+        # Ensure uv environment is set up
+        cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv sync
         # Verify Task 1 completed
         grep -n "def is_memory_id" src/recall/memory/operations.py
         # Verify memory_forget_tool exists
