@@ -380,10 +380,10 @@ def main():
     """
     from datetime import datetime
 
-    # Read hook input from stdin (Claude Code passes JSON)
+    # Read hook input from stdin (supports both Claude Code snake_case and Factory camelCase)
     hook_input = read_hook_input()
-    session_id = hook_input.get("session_id", "unknown")
-    transcript_path = hook_input.get("transcript_path")
+    session_id = hook_input.get("session_id") or hook_input.get("sessionId", "unknown")
+    transcript_path = hook_input.get("transcript_path") or hook_input.get("transcriptPath")
     cwd = hook_input.get("cwd", os.getcwd())
 
     # Log hook invocation for verification
