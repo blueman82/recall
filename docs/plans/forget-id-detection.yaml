@@ -1,0 +1,400 @@
+# ═══════════════════════════════════════════════════════════════
+# DATA FLOW REGISTRY
+# ═══════════════════════════════════════════════════════════════
+# PRODUCERS: Task 1 → is_memory_id(), detect_input_type()
+# CONSUMERS: Task 2 → [1], Task 3 → [2], Task 4 → [1, 2]
+# VALIDATION: All consumers depend_on producers ✓
+# ═══════════════════════════════════════════════════════════════
+# SUCCESS CRITERIA VALIDATION
+# ═══════════════════════════════════════════════════════════════
+# All criteria derived from key_points ✓
+# Same terminology in key_points and criteria ✓
+# Component tasks have CAPABILITY-only criteria ✓
+# Integration task (4) has integration_criteria ✓
+# ═══════════════════════════════════════════════════════════════
+
+conductor:
+  worktree_groups:
+    - group_id: "forget-id-detection"
+      description: "Extend forget tool with ID detection"
+      tasks: [1, 2, 3, 4]
+      rationale: "All tasks modify recall package for same feature"
+plan:
+  metadata:
+    feature_name: "Forget Tool ID Detection"
+    created: "2025-12-17"
+    target: "Enable forget tool to accept both memory IDs and semantic queries, auto-detecting the input type"
+  context:
+    framework: "MCP (Model Context Protocol)"
+    architecture: "Async Python with hybrid storage (SQLite + ChromaDB)"
+    test_framework: "pytest with pytest-asyncio"
+    language: "Python 3.13"
+  tasks:
+    # ─────────────────────────────────────────────────────────────
+    # Task 1: Add ID Detection Utilities
+    # ─────────────────────────────────────────────────────────────
+    - task_number: "1"
+      name: "Add is_memory_id and detect_input_type utility functions"
+      agent: python-pro
+      files:
+        - "src/recall/memory/operations.py"
+      depends_on: []
+      estimated_time: "20m"
+      success_criteria:
+        - "is_memory_id() function accepts a string and returns bool indicating if it matches UUID4 or mem_timestamp_hex pattern."
+        - "_UUID4_PATTERN regex matches standard UUID4 format (8-4-4-4-12 hex with hyphens), case-insensitive."
+        - "_TIMESTAMPED_PATTERN regex matches mem_{13-19 digits}_{8 hex chars} format, case-insensitive."
+        - "detect_input_type() function returns Literal['memory_id', 'query'] based on is_memory_id() result."
+        - "Empty strings and None-like values return False from is_memory_id()."
+        - "Leading/trailing whitespace is stripped before pattern matching."
+        - "No TODO comments in production code paths."
+        - "No placeholder empty structs."
+        - "No unused variables."
+      test_commands:
+        - "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -c \"from recall.memory.operations import is_memory_id, detect_input_type; assert is_memory_id('550e8400-e29b-41d4-a716-446655440000') == True; assert is_memory_id('mem_1702783200000000_abc12def') == True; assert is_memory_id('user prefers dark') == False; assert detect_input_type('550e8400-e29b-41d4-a716-446655440000') == 'memory_id'; assert detect_input_type('hello world') == 'query'; print('All assertions passed')\""
+      description: |
+        ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
+        ```bash
+        # Ensure uv environment is set up
+        cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv sync
+        # Verify operations.py exists and has expected structure
+        grep -n "def _generate_memory_id" src/recall/memory/operations.py
+        grep -n "def _is_golden_rule" src/recall/memory/operations.py
+        ```
+
+        ## TASK DESCRIPTION
+        Add two utility functions near the top of operations.py (after imports, before existing functions):
+        1. `is_memory_id(value: str) -> bool` - Detects if input matches memory ID patterns
+        2. `detect_input_type(value: str) -> Literal["memory_id", "query"]` - Returns the detected type
+
+        Memory ID patterns to detect:
+        - UUID4: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` (e.g., `550e8400-e29b-41d4-a716-446655440000`)
+        - Timestamped: `mem_{timestamp}_{hex8}` (e.g., `mem_1702783200000000_abc12def`)
+
+        Place functions after line 43 (after constants, before `_call_ollama_for_relationship`).
+      implementation:
+        approach: |
+          Add compiled regex patterns as module-level constants for performance.
+          Use case-insensitive matching since UUIDs can be upper/lower case.
+          Strip whitespace to handle copy-paste errors from users.
+          Return early for empty/None inputs.
+        key_points:
+          - point: "_UUID4_PATTERN regex constant"
+            details: "Compiled regex matching 8-4-4-4-12 hex format with hyphens, case-insensitive"
+            reference: "src/recall/memory/operations.py"
+          - point: "_TIMESTAMPED_PATTERN regex constant"
+            details: "Compiled regex matching mem_{13-19 digits}_{8 hex} format, case-insensitive"
+            reference: "src/recall/memory/operations.py"
+          - point: "is_memory_id() function"
+            details: "Strips whitespace, checks both patterns, returns bool"
+            reference: "src/recall/memory/operations.py"
+          - point: "detect_input_type() function"
+            details: "Returns Literal['memory_id', 'query'] using is_memory_id()"
+            reference: "src/recall/memory/operations.py"
+          - point: "Empty/None handling"
+            details: "Return False for empty strings or non-string inputs"
+            reference: "src/recall/memory/operations.py"
+        integration: {}
+      verification:
+        automated_tests:
+          command: "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -c \"from recall.memory.operations import is_memory_id, detect_input_type; print('Functions imported successfully')\""
+          expected_output: "Functions imported successfully"
+      code_quality:
+        python:
+          full_quality_pipeline:
+            command: |
+              cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -c "from recall.memory.operations import is_memory_id, detect_input_type; assert callable(is_memory_id); assert callable(detect_input_type); print('OK')"
+            exit_on_failure: true
+      commit:
+        type: "feat"
+        message: "add is_memory_id and detect_input_type utility functions"
+        files:
+          - "src/recall/memory/operations.py"
+      status: "completed"
+      execution_history:
+        - attempt_number: "1"
+          agent: python-backend-tdd-agent
+          verdict: GREEN
+          agent_output: |
+            {"type":"result","subtype":"success","is_error":false,"duration_ms":33040,"duration_api_ms":42540,"num_turns":4,"result":"{\"status\":\"success\",\"summary\":\"The is_memory_id and detect_input_type utility functions already exist in src/recall/memory/operations.py at lines 61-93, with compiled regex patterns at lines 48-58. Functions import and work correctly.\",\"output\":\"The utility functions were already implemented in the file:\\n\\n1. **Regex patterns** (lines 48-58):\\n   - `_UUID4_PATTERN`: Compiled regex for UUID4 format (8-4-4-4-12 hex digits), case-insensitive\\n   - `_TIMESTAMPED_PATTERN`: Compiled regex for mem_{timestamp}_{hex8} format, case-insensitive\\n\\n2. **is_memory_id(value: str) -> bool** (lines 61-81):\\n   - Returns False for empty/None/non-string inputs\\n   - Strips whitespace before checking\\n   - Returns True if value matches UUID4 or timestamped pattern\\n\\n3. **detect_input_type(value: str) -> Literal[\\\"memory_id\\\", \\\"query\\\"]** (lines 84-93):\\n   - Returns \\\"memory_id\\\" if is_memory_id() returns True\\n   - Returns \\\"query\\\" otherwise\\n\\nVerification test passed: `from recall.memory.operations import is_memory_id, detect_input_type` imports successfully.\",\"files_modified\":[],\"errors\":[],\"metadata\":{\"already_implemented\":true,\"line_numbers\":{\"patterns\":\"48-58\",\"is_memory_id\":\"61-81\",\"detect_input_type\":\"84-93\"}}}","session_id":"0669662c-8ecf-4ca1-9974-e5f4699a149d","total_cost_usd":0.359064,"usage":{"input_tokens":6,"cache_creation_input_tokens":29412,"cache_read_input_tokens":220881,"output_tokens":1118,"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":29412}},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":2161,"outputTokens":191,"cacheReadInputTokens":0,"cacheCreationInputTokens":4255,"webSearchRequests":0,"costUSD":0.00843475,"contextWindow":200000},"claude-opus-4-5-20251101":{"inputTokens":9,"outputTokens":1157,"cacheReadInputTokens":220881,"cacheCreationInputTokens":33795,"webSearchRequests":0,"costUSD":0.35062925,"contextWindow":200000}},"permission_denials":[],"structured_output":{"status":"success","summary":"The is_memory_id and detect_input_type utility functions already exist in src/recall/memory/operations.py at lines 61-93, with compiled regex patterns at lines 48-58. Functions import and work correctly.","output":"The utility functions were already implemented in the file:\n\n1. **Regex patterns** (lines 48-58):\n   - `_UUID4_PATTERN`: Compiled regex for UUID4 format (8-4-4-4-12 hex digits), case-insensitive\n   - `_TIMESTAMPED_PATTERN`: Compiled regex for mem_{timestamp}_{hex8} format, case-insensitive\n\n2. **is_memory_id(value: str) -> bool** (lines 61-81):\n   - Returns False for empty/None/non-string inputs\n   - Strips whitespace before checking\n   - Returns True if value matches UUID4 or timestamped pattern\n\n3. **detect_input_type(value: str) -> Literal[\"memory_id\", \"query\"]** (lines 84-93):\n   - Returns \"memory_id\" if is_memory_id() returns True\n   - Returns \"query\" otherwise\n\nVerification test passed: `from recall.memory.operations import is_memory_id, detect_input_type` imports successfully.","files_modified":[],"errors":[],"metadata":{"already_implemented":true,"line_numbers":{"patterns":"48-58","is_memory_id":"61-81","detect_input_type":"84-93"}}},"uuid":"bb7380b8-bdbc-4156-b06b-780f689e3078"}
+          qc_feedback: "[code-reviewer] All success criteria verified. The implementation exists in src/recall/memory/operations.py with:\n- `is_memory_id(value: str) -> bool` function at lines 61-81 that detects UUID4 and mem_timestamp_hex patterns\n- `_UUID4_PATTERN` regex at lines 50-53 matching 8-4-4-4-12 hex format, case-insensitive\n- `_TIMESTAMPED_PATTERN` regex at lines 55-58 matching mem_{13-19 digits}_{8 hex} format, case-insensitive  \n- `detect_input_type(value: str) -> Literal[\"memory_id\", \"query\"]` function at lines 84-93\n- Proper empty/None handling (line 74-75) returning False\n- Whitespace stripping (line 77-79) before pattern matching\n- No TODO comments in production code\n- The `pass` statements found are inside exception handlers with intentional error suppression, not placeholder empty structs\n- All test assertions passed confirming correct behavior\n[python-pro] All success criteria verified. The is_memory_id and detect_input_type utility functions are correctly implemented in src/recall/memory/operations.py at lines 61-93, with compiled regex patterns at lines 48-58. Functions import and pass all test assertions including edge cases for empty strings, None values, whitespace stripping, and case-insensitive matching.\n[backend-security-coder] All success criteria have been verified. The implementation correctly adds is_memory_id() and detect_input_type() utility functions with proper regex patterns at the specified location in operations.py. Functions import correctly and all test assertions pass.\n[quality-control] All success criteria verified. The is_memory_id and detect_input_type utility functions are properly implemented in src/recall/memory/operations.py at lines 61-93, with compiled regex patterns at lines 48-58. All test commands passed, confirming correct functionality for UUID4 patterns, timestamped patterns, empty/None handling, whitespace stripping, and detect_input_type return values."
+          timestamp: "2025-12-17T13:04:52Z"
+      completed_date: "2025-12-17"
+    # ─────────────────────────────────────────────────────────────
+    # Task 2: Add Unit Tests for ID Detection
+    # ─────────────────────────────────────────────────────────────
+    - task_number: "2"
+      name: "Add unit tests for ID detection utilities"
+      agent: python-pro
+      files:
+        - "tests/unit/test_memory_operations.py"
+      depends_on: [1]
+      estimated_time: "25m"
+      success_criteria:
+        - "TestMemoryIdDetection class contains tests for is_memory_id() function."
+        - "test_is_memory_id_uuid4_lowercase verifies lowercase UUID4 returns True."
+        - "test_is_memory_id_uuid4_uppercase verifies uppercase UUID4 returns True."
+        - "test_is_memory_id_timestamped_format verifies mem_{timestamp}_{hex} returns True."
+        - "test_is_memory_id_empty_string verifies empty string returns False."
+        - "test_is_memory_id_natural_language_query verifies queries like 'user prefers dark mode' return False."
+        - "test_is_memory_id_partial_uuid verifies partial UUIDs return False."
+        - "test_is_memory_id_with_whitespace verifies whitespace-padded IDs still return True."
+        - "test_detect_input_type_memory_id verifies detection returns 'memory_id' for valid IDs."
+        - "test_detect_input_type_query verifies detection returns 'query' for non-IDs."
+        - "No TODO comments in production code paths."
+        - "No placeholder empty structs."
+        - "No unused variables."
+        - "All imports from dependency tasks resolve."
+      test_commands:
+        - "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -m pytest tests/unit/test_memory_operations.py -k 'TestMemoryIdDetection' -v"
+      description: |
+        ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
+        ```bash
+        # Ensure uv environment is set up
+        cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv sync
+        # Verify Task 1 completed - functions exist
+        grep -n "def is_memory_id" src/recall/memory/operations.py
+        grep -n "def detect_input_type" src/recall/memory/operations.py
+        ```
+
+        ## TASK DESCRIPTION
+        Add a new test class `TestMemoryIdDetection` to test_memory_operations.py.
+        Follow existing test patterns in the file (class-based, pytest.mark.asyncio for async tests).
+
+        Test cases needed:
+        1. UUID4 detection (upper/lower case)
+        2. Timestamped format detection
+        3. Empty string handling
+        4. Natural language query rejection
+        5. Partial/invalid ID rejection
+        6. Whitespace handling
+        7. detect_input_type routing
+
+        Place the new class after `TestMemoryForgetIntegration` (around line 2600).
+      implementation:
+        approach: |
+          Follow existing test class patterns in the file.
+          Use parametrized tests where appropriate for multiple input variations.
+          Import is_memory_id and detect_input_type from recall.memory.operations.
+        key_points:
+          - point: "TestMemoryIdDetection test class"
+            details: "New class containing all ID detection tests"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "test_is_memory_id_uuid4_lowercase"
+            details: "Verifies lowercase UUID4 format returns True"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "test_is_memory_id_uuid4_uppercase"
+            details: "Verifies uppercase UUID4 format returns True"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "test_is_memory_id_timestamped_format"
+            details: "Verifies mem_timestamp_hex format returns True"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "test_is_memory_id_empty_string"
+            details: "Verifies empty string returns False"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "test_is_memory_id_natural_language_query"
+            details: "Verifies natural language queries return False"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "test_is_memory_id_partial_uuid"
+            details: "Verifies partial UUIDs return False"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "test_is_memory_id_with_whitespace"
+            details: "Verifies whitespace-padded IDs still return True"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "test_detect_input_type_memory_id"
+            details: "Verifies detect_input_type returns 'memory_id' for valid IDs"
+            reference: "tests/unit/test_memory_operations.py"
+          - point: "test_detect_input_type_query"
+            details: "Verifies detect_input_type returns 'query' for non-IDs"
+            reference: "tests/unit/test_memory_operations.py"
+        integration:
+          imports: ["recall.memory.operations.is_memory_id", "recall.memory.operations.detect_input_type"]
+      verification:
+        automated_tests:
+          command: "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -m pytest tests/unit/test_memory_operations.py -k 'TestMemoryIdDetection' -v"
+          expected_output: "All tests pass"
+      code_quality:
+        python:
+          full_quality_pipeline:
+            command: |
+              cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -m pytest tests/unit/test_memory_operations.py -k 'TestMemoryIdDetection' -v
+            exit_on_failure: true
+      commit:
+        type: "test"
+        message: "add unit tests for is_memory_id and detect_input_type"
+        files:
+          - "tests/unit/test_memory_operations.py"
+      status: "in-progress"
+    # ─────────────────────────────────────────────────────────────
+    # Task 3: Update MCP Tool with Smart Input Parameter
+    # ─────────────────────────────────────────────────────────────
+    - task_number: "3"
+      name: "Add smart input parameter to memory_forget_tool"
+      agent: python-pro
+      files:
+        - "src/recall/__main__.py"
+      depends_on: [1]
+      estimated_time: "20m"
+      success_criteria:
+        - "memory_forget_tool() accepts new 'input' parameter of type Optional[str] defaulting to None."
+        - "When memory_id and query are both None but input is provided, is_memory_id(input) determines routing."
+        - "If is_memory_id(input) returns True, memory_id is set to input value."
+        - "If is_memory_id(input) returns False, query is set to input value."
+        - "Explicit memory_id or query parameters take precedence over input parameter."
+        - "is_memory_id is imported from recall.memory.operations."
+        - "Docstring updated to document the new input parameter and auto-detection behavior."
+        - "No TODO comments in production code paths."
+        - "No placeholder empty structs."
+        - "No unused variables."
+        - "All imports from dependency tasks resolve."
+      test_commands:
+        - "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -c \"from recall.__main__ import memory_forget_tool; import inspect; sig = inspect.signature(memory_forget_tool); assert 'input' in sig.parameters, 'input param missing'\""
+      description: |
+        ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
+        ```bash
+        # Ensure uv environment is set up
+        cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv sync
+        # Verify Task 1 completed
+        grep -n "def is_memory_id" src/recall/memory/operations.py
+        # Verify memory_forget_tool exists
+        grep -n "async def memory_forget_tool" src/recall/__main__.py
+        ```
+
+        ## TASK DESCRIPTION
+        Update memory_forget_tool() in __main__.py to:
+        1. Add new `input: Optional[str] = None` parameter
+        2. Import is_memory_id from recall.memory.operations
+        3. Add auto-detection logic before calling memory_forget()
+        4. Update docstring to document the new parameter
+
+        Auto-detection logic:
+        ```python
+        if memory_id is None and query is None and input is not None:
+            if is_memory_id(input):
+                memory_id = input
+            else:
+                query = input
+        ```
+      implementation:
+        approach: |
+          Add the input parameter after query in the function signature.
+          Add the auto-detection logic at the start of the function body, after the store check.
+          Preserve all existing behavior when input is not used.
+        key_points:
+          - point: "Import is_memory_id from operations"
+            details: "Add to existing imports from recall.memory.operations"
+            reference: "src/recall/__main__.py"
+          - point: "Add input parameter to memory_forget_tool"
+            details: "Optional[str] = None, positioned after query parameter"
+            reference: "src/recall/__main__.py"
+          - point: "Auto-detection logic for input parameter"
+            details: "If memory_id and query are None but input provided, use is_memory_id to route"
+            reference: "src/recall/__main__.py"
+          - point: "Explicit params take precedence"
+            details: "Only use input when both memory_id and query are None"
+            reference: "src/recall/__main__.py"
+          - point: "Updated docstring"
+            details: "Document input parameter and auto-detection behavior"
+            reference: "src/recall/__main__.py"
+        integration:
+          imports: ["recall.memory.operations.is_memory_id"]
+      verification:
+        automated_tests:
+          command: "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -c \"from recall.__main__ import memory_forget_tool; import inspect; sig = inspect.signature(memory_forget_tool); assert 'input' in sig.parameters\""
+          expected_output: "No assertion error"
+      code_quality:
+        python:
+          full_quality_pipeline:
+            command: |
+              cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -c "from recall.__main__ import memory_forget_tool; print('Import successful')"
+            exit_on_failure: true
+      commit:
+        type: "feat"
+        message: "add smart input parameter to memory_forget_tool with auto-detection"
+        files:
+          - "src/recall/__main__.py"
+    # ─────────────────────────────────────────────────────────────
+    # Task 4: Update Slash Command
+    # ─────────────────────────────────────────────────────────────
+    - task_number: "4"
+      name: "Update /forget slash command with ID detection instructions"
+      agent: python-pro
+      files:
+        - ".claude/commands/forget.md"
+      depends_on: [3]
+      estimated_time: "15m"
+      type: integration
+      success_criteria:
+        - "Slash command instructions include ID pattern detection step."
+        - "UUID4 pattern documented as xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx format."
+        - "Timestamped pattern documented as mem_{digits}_{hex8} format."
+        - "When input matches ID pattern, memory_forget_tool called with memory_id parameter."
+        - "When input does not match ID pattern, existing query-based flow is used."
+        - "ID deletion skips preview step and deletes directly."
+        - "Query deletion maintains search-preview-confirm flow."
+        - "No TODO comments in production code paths."
+      integration_criteria:
+        - "Slash command correctly routes to memory_forget_tool with appropriate parameter based on input type."
+        - "ID-based deletion produces expected 'Deleted memory: {id}' output."
+        - "Query-based deletion produces expected 'Deleted N memories matching {query}' output."
+      test_commands:
+        - "cat /Users/harrison/Documents/Github/recall-forget-id-detection/.claude/commands/forget.md | grep -q 'memory_id'"
+      description: |
+        ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
+        ```bash
+        # Ensure uv environment is set up
+        cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv sync
+        # Verify Task 3 completed - input param exists
+        grep -n "input:" src/recall/__main__.py | head -5
+        # Verify forget.md exists
+        cat .claude/commands/forget.md
+        ```
+
+        ## TASK DESCRIPTION
+        Update the /forget slash command to detect and handle memory IDs.
+
+        New flow:
+        1. Detect if $ARGUMENTS matches ID pattern (UUID4 or mem_timestamp_hex)
+        2. If ID: call memory_forget_tool(memory_id="$ARGUMENTS") directly, skip preview
+        3. If query: use existing search-preview-confirm flow
+
+        Add clear documentation of both ID patterns for Claude to recognize.
+      implementation:
+        approach: |
+          Restructure the instructions to first detect input type.
+          For IDs, provide a direct deletion path.
+          For queries, preserve the existing preview-confirm flow.
+        key_points:
+          - point: "ID pattern detection instructions"
+            details: "Document UUID4 and mem_timestamp_hex patterns for Claude to recognize"
+            reference: ".claude/commands/forget.md"
+          - point: "ID-based deletion path"
+            details: "Call memory_forget_tool with memory_id param, skip preview"
+            reference: ".claude/commands/forget.md"
+          - point: "Query-based deletion path"
+            details: "Maintain existing search-preview-confirm flow with query param"
+            reference: ".claude/commands/forget.md"
+          - point: "Output format for ID deletion"
+            details: "Report 'Deleted memory: {id}' for single ID deletion"
+            reference: ".claude/commands/forget.md"
+          - point: "Output format for query deletion"
+            details: "Report 'Deleted N memories matching {query}' for query deletion"
+            reference: ".claude/commands/forget.md"
+        integration:
+          imports: []
+          config_values: []
+      verification:
+        automated_tests:
+          command: "cat /Users/harrison/Documents/Github/recall-forget-id-detection/.claude/commands/forget.md | grep -q 'memory_id' && echo 'PASS'"
+          expected_output: "PASS"
+      code_quality:
+        markdown:
+          validation:
+            command: |
+              cat /Users/harrison/Documents/Github/recall-forget-id-detection/.claude/commands/forget.md
+            exit_on_failure: false
+      commit:
+        type: "feat"
+        message: "update /forget slash command with ID detection"
+        files:
+          - ".claude/commands/forget.md"

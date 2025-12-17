@@ -13,7 +13,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import httpx
 
@@ -44,6 +44,66 @@ RELATIONSHIP_SIMILARITY_THRESHOLD = 0.6
 
 # Maximum number of relationships to create per memory store
 MAX_AUTO_RELATIONSHIPS = 5
+
+
+def _is_valid_uuid(value: str) -> bool:
+    """Return True if value is a valid UUID."""
+    try:
+        uuid.UUID(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_timestamped_id(value: str) -> bool:
+    """Return True if value matches mem_{timestamp}_{hex8} format."""
+    parts = value.lower().split("_")
+    if len(parts) != 3 or parts[0] != "mem":
+        return False
+
+    timestamp, suffix = parts[1], parts[2]
+    if not timestamp.isdigit() or len(suffix) != 8:
+        return False
+
+    try:
+        int(suffix, 16)
+        return True
+    except ValueError:
+        return False
+
+
+def is_memory_id(value: str) -> bool:
+    """Return True if value matches a memory ID pattern.
+
+    Detect two memory ID formats:
+        - UUID: validated via uuid.UUID()
+        - Timestamped: mem_{timestamp}_{hex8}
+
+    Args:
+        value: The string to check.
+
+    Returns:
+        True if the value matches a memory ID pattern, False otherwise.
+
+    """
+    if not isinstance(value, str) or not (stripped := value.strip()):
+        return False
+
+    return _is_valid_uuid(stripped) or _is_timestamped_id(stripped)
+
+
+def detect_input_type(value: str) -> Literal["memory_id", "query"]:
+    """Return 'memory_id' or 'query' based on input format.
+
+    Args:
+        value: The input string to classify.
+
+    Returns:
+        'memory_id' if value matches a memory ID pattern, 'query' otherwise.
+
+    """
+    return "memory_id" if is_memory_id(value) else "query"
+
 
 # LLM prompt for relationship type classification
 RELATIONSHIP_CLASSIFICATION_PROMPT = """You are analyzing the relationship between two memories in a knowledge graph.
