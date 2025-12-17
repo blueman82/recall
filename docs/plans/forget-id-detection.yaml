@@ -51,7 +51,7 @@ plan:
         - "No placeholder empty structs."
         - "No unused variables."
       test_commands:
-        - "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -m pytest tests/unit/test_memory_operations.py -k 'TestMemoryIdDetection' -v"
+        - "cd /Users/harrison/Documents/Github/recall-forget-id-detection && uv run python -c \"from recall.memory.operations import is_memory_id, detect_input_type; assert is_memory_id('550e8400-e29b-41d4-a716-446655440000') == True; assert is_memory_id('mem_1702783200000000_abc12def') == True; assert is_memory_id('user prefers dark') == False; assert detect_input_type('550e8400-e29b-41d4-a716-446655440000') == 'memory_id'; assert detect_input_type('hello world') == 'query'; print('All assertions passed')\""
       description: |
         ## PHASE 0: DEPENDENCY VERIFICATION (EXECUTE FIRST)
         ```bash
@@ -110,6 +110,7 @@ plan:
         message: "add is_memory_id and detect_input_type utility functions"
         files:
           - "src/recall/memory/operations.py"
+      status: "failed"
     # ─────────────────────────────────────────────────────────────
     # Task 2: Add Unit Tests for ID Detection
     # ─────────────────────────────────────────────────────────────
