@@ -397,11 +397,12 @@ Respond ONLY with a JSON object:
             )
 
             if proc.returncode != 0:
-                logger.error(f"Claude CLI failed: {stderr.decode()}")
+                logger.error(f"Claude CLI failed (rc={proc.returncode}): {stderr.decode()}")
                 return None
 
             # Parse JSON output from Claude CLI
             output = stdout.decode().strip()
+            logger.debug(f"Claude CLI raw output: {output[:500]}...")
             if not output:
                 logger.warning("Claude CLI returned empty output")
                 return None
