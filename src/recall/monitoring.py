@@ -417,15 +417,20 @@ Respond ONLY with a JSON object:
                 logger.debug(f"Extracted result field, type={type(content).__name__}")
 
                 if isinstance(content, str):
-                    # Strip markdown code blocks if present
+                    # Extract JSON from markdown code blocks anywhere in response
                     content = content.strip()
-                    if content.startswith("```"):
-                        lines = content.split("\n")
-                        if lines[0].startswith("```"):
-                            lines = lines[1:]
-                        if lines and lines[-1].strip() == "```":
-                            lines = lines[:-1]
-                        content = "\n".join(lines)
+
+                    # Find ```json ... ``` block anywhere in the text
+                    if "```json" in content:
+                        start = content.find("```json") + 7
+                        end = content.find("```", start)
+                        if end > start:
+                            content = content[start:end].strip()
+                    elif "```" in content:
+                        start = content.find("```") + 3
+                        end = content.find("```", start)
+                        if end > start:
+                            content = content[start:end].strip()
 
                     logger.debug(f"Parsing JSON content: {content[:200]}...")
                     return cast(dict[str, Any], json.loads(content))
