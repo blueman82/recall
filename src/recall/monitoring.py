@@ -382,6 +382,7 @@ Respond ONLY with a JSON object:
                 "--model", model,
                 "--system-prompt", system_prompt,
                 "--no-session-persistence",
+                "--settings", '{"hooks":{}}',  # Disable hooks to prevent infinite loop
                 prompt,
             ]
 
