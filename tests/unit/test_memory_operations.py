@@ -2614,6 +2614,292 @@ class TestMemoryForgetIntegration:
 
 
 # ============================================================================
+# Edge Forget Tests
+# ============================================================================
+
+
+class TestEdgeForget:
+    """Tests for edge_forget operation."""
+
+    @pytest.fixture
+    def mock_store(self):
+        """Create a mock HybridStore for testing."""
+        store = MagicMock(spec=HybridStore)
+        store.delete_edge = MagicMock(return_value=True)
+        store.get_edges = MagicMock(return_value=[])
+        return store
+
+    def test_edge_forget_by_id_success(self, mock_store):
+        """Test successful edge deletion by ID."""
+        from recall.memory.operations import edge_forget
+
+        mock_store.delete_edge.return_value = True
+
+        result = edge_forget(store=mock_store, edge_id=42)
+
+        assert result.success is True
+        assert result.deleted_count == 1
+        assert 42 in result.deleted_ids
+        mock_store.delete_edge.assert_called_once_with(42)
+
+    def test_edge_forget_by_id_not_found(self, mock_store):
+        """Test edge deletion when edge ID not found."""
+        from recall.memory.operations import edge_forget
+
+        mock_store.delete_edge.return_value = False
+
+        result = edge_forget(store=mock_store, edge_id=999)
+
+        assert result.success is False
+        assert "not found" in result.error
+        assert result.deleted_count == 0
+
+    def test_edge_forget_by_memory_id_success(self, mock_store):
+        """Test successful deletion of all edges for a memory."""
+        from recall.memory.operations import edge_forget
+
+        mock_store.get_edges.return_value = [
+            {"id": 1, "source_id": "mem_123", "target_id": "mem_456", "edge_type": "relates_to"},
+            {"id": 2, "source_id": "mem_789", "target_id": "mem_123", "edge_type": "supersedes"},
+        ]
+        mock_store.delete_edge.return_value = True
+
+        result = edge_forget(store=mock_store, memory_id="mem_123")
+
+        assert result.success is True
+        assert result.deleted_count == 2
+        assert 1 in result.deleted_ids
+        assert 2 in result.deleted_ids
+
+    def test_edge_forget_by_memory_id_with_direction(self, mock_store):
+        """Test edge deletion with direction filter."""
+        from recall.memory.operations import edge_forget
+
+        mock_store.get_edges.return_value = [
+            {"id": 1, "source_id": "mem_123", "target_id": "mem_456", "edge_type": "relates_to"},
+        ]
+        mock_store.delete_edge.return_value = True
+
+        result = edge_forget(store=mock_store, memory_id="mem_123", direction="outgoing")
+
+        assert result.success is True
+        mock_store.get_edges.assert_called_once_with("mem_123", direction="outgoing", edge_type=None)
+
+    def test_edge_forget_by_memory_id_with_relation_filter(self, mock_store):
+        """Test edge deletion with relation type filter."""
+        from recall.memory.operations import edge_forget
+
+        mock_store.get_edges.return_value = [
+            {"id": 1, "source_id": "mem_123", "target_id": "mem_456", "edge_type": "contradicts"},
+        ]
+        mock_store.delete_edge.return_value = True
+
+        result = edge_forget(store=mock_store, memory_id="mem_123", relation="contradicts")
+
+        assert result.success is True
+        mock_store.get_edges.assert_called_once_with("mem_123", direction="both", edge_type="contradicts")
+
+    def test_edge_forget_by_pair_success(self, mock_store):
+        """Test successful deletion of edge between two memories."""
+        from recall.memory.operations import edge_forget
+
+        mock_store.get_edges.return_value = [
+            {"id": 5, "source_id": "mem_123", "target_id": "mem_456", "edge_type": "relates_to"},
+        ]
+        mock_store.delete_edge.return_value = True
+
+        result = edge_forget(store=mock_store, source_id="mem_123", target_id="mem_456")
+
+        assert result.success is True
+        assert result.deleted_count == 1
+        assert 5 in result.deleted_ids
+
+    def test_edge_forget_by_pair_with_relation(self, mock_store):
+        """Test pair deletion with specific relation type."""
+        from recall.memory.operations import edge_forget
+
+        mock_store.get_edges.return_value = [
+            {"id": 3, "source_id": "mem_123", "target_id": "mem_456", "edge_type": "contradicts"},
+        ]
+        mock_store.delete_edge.return_value = True
+
+        result = edge_forget(
+            store=mock_store,
+            source_id="mem_123",
+            target_id="mem_456",
+            relation="contradicts"
+        )
+
+        assert result.success is True
+        mock_store.get_edges.assert_called_once_with("mem_123", direction="outgoing", edge_type="contradicts")
+
+    def test_edge_forget_no_params_fails(self, mock_store):
+        """Test that providing no params returns error."""
+        from recall.memory.operations import edge_forget
+
+        result = edge_forget(store=mock_store)
+
+        assert result.success is False
+        assert "Must provide" in result.error
+
+    def test_edge_forget_partial_pair_fails(self, mock_store):
+        """Test that providing only source_id without target_id fails."""
+        from recall.memory.operations import edge_forget
+
+        result = edge_forget(store=mock_store, source_id="mem_123")
+
+        assert result.success is False
+        assert "both source_id and target_id" in result.error
+
+    def test_edge_forget_mixed_modes_fails(self, mock_store):
+        """Test that mixing deletion modes fails."""
+        from recall.memory.operations import edge_forget
+
+        result = edge_forget(store=mock_store, edge_id=42, memory_id="mem_123")
+
+        assert result.success is False
+        assert "Cannot mix" in result.error
+
+    def test_edge_forget_exception_handled(self, mock_store):
+        """Test that exceptions are caught and returned as errors."""
+        from recall.memory.operations import edge_forget
+
+        mock_store.delete_edge.side_effect = Exception("Database error")
+
+        result = edge_forget(store=mock_store, edge_id=42)
+
+        assert result.success is False
+        assert "Failed to delete edges" in result.error
+
+
+class TestEdgeForgetIntegration:
+    """Integration tests for edge_forget using real ephemeral stores."""
+
+    @pytest.fixture
+    async def integration_store(self):
+        """Create real ephemeral HybridStore for integration tests."""
+        store = await HybridStore.create(
+            ephemeral=True,
+            sync_on_write=True,
+            collection_name=unique_collection_name(),
+        )
+        yield store
+        # Cleanup
+        sqlite = store._sqlite
+        sqlite.close()
+
+    @pytest.mark.asyncio
+    async def test_edge_forget_by_id_integration(self, integration_store):
+        """Test full edge deletion by ID with real stores."""
+        from recall.memory.operations import edge_forget
+
+        # Store two memories
+        result1 = await memory_store(
+            store=integration_store,
+            content="First memory",
+        )
+        result2 = await memory_store(
+            store=integration_store,
+            content="Second memory",
+        )
+
+        # Create edge between them
+        edge_id = memory_relate(
+            store=integration_store._sqlite,
+            source_id=result1.id,
+            target_id=result2.id,
+            relation=RelationType.RELATES_TO,
+        )
+
+        # Verify edge exists
+        edges_before = integration_store.get_edges(result1.id, direction="outgoing")
+        assert len(edges_before) == 1
+
+        # Delete the edge
+        result = edge_forget(store=integration_store, edge_id=edge_id)
+
+        assert result.success is True
+        assert result.deleted_count == 1
+
+        # Verify edge is gone
+        edges_after = integration_store.get_edges(result1.id, direction="outgoing")
+        assert len(edges_after) == 0
+
+    @pytest.mark.asyncio
+    async def test_edge_forget_by_memory_id_integration(self, integration_store):
+        """Test deletion of all edges for a memory with real stores."""
+        from recall.memory.operations import edge_forget
+
+        # Store three memories
+        mem1 = await memory_store(store=integration_store, content="Memory 1")
+        mem2 = await memory_store(store=integration_store, content="Memory 2")
+        mem3 = await memory_store(store=integration_store, content="Memory 3")
+
+        # Create edges: mem1 -> mem2, mem3 -> mem1
+        memory_relate(
+            store=integration_store._sqlite,
+            source_id=mem1.id,
+            target_id=mem2.id,
+            relation=RelationType.RELATES_TO,
+        )
+        memory_relate(
+            store=integration_store._sqlite,
+            source_id=mem3.id,
+            target_id=mem1.id,
+            relation=RelationType.SUPERSEDES,
+        )
+
+        # Verify edges exist
+        edges_both = integration_store.get_edges(mem1.id, direction="both")
+        assert len(edges_both) == 2
+
+        # Delete all edges for mem1
+        result = edge_forget(store=integration_store, memory_id=mem1.id)
+
+        assert result.success is True
+        assert result.deleted_count == 2
+
+        # Verify edges are gone
+        edges_after = integration_store.get_edges(mem1.id, direction="both")
+        assert len(edges_after) == 0
+
+    @pytest.mark.asyncio
+    async def test_edge_forget_by_pair_integration(self, integration_store):
+        """Test deletion of edge between specific memories with real stores."""
+        from recall.memory.operations import edge_forget
+
+        # Store two memories
+        mem1 = await memory_store(store=integration_store, content="Source memory")
+        mem2 = await memory_store(store=integration_store, content="Target memory")
+
+        # Create edge
+        memory_relate(
+            store=integration_store._sqlite,
+            source_id=mem1.id,
+            target_id=mem2.id,
+            relation=RelationType.CONTRADICTS,
+        )
+
+        # Verify edge exists
+        edges_before = integration_store.get_edges(mem1.id, direction="outgoing")
+        assert len(edges_before) == 1
+
+        # Delete by pair
+        result = edge_forget(
+            store=integration_store,
+            source_id=mem1.id,
+            target_id=mem2.id,
+        )
+
+        assert result.success is True
+        assert result.deleted_count == 1
+
+        # Verify edge is gone
+        edges_after = integration_store.get_edges(mem1.id, direction="outgoing")
+        assert len(edges_after) == 0
+
+
+# ============================================================================
 # Memory ID Detection Tests
 # ============================================================================
 
