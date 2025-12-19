@@ -620,6 +620,90 @@ async def memory_relate_tool(
 
 
 # =============================================================================
+# MCP Tool Handlers - Edge Forget
+# =============================================================================
+
+
+@mcp.tool()
+async def memory_edge_forget_tool(
+    edge_id: Optional[int] = None,
+    memory_id: Optional[str] = None,
+    source_id: Optional[str] = None,
+    target_id: Optional[str] = None,
+    relation: Optional[str] = None,
+    direction: str = "both",
+) -> dict[str, Any]:
+    """Delete edges (relationships) between memories.
+
+    Supports three deletion modes:
+    1. Direct ID: Delete a specific edge by its ID
+    2. Memory-based: Delete all edges connected to a memory
+    3. Pair: Delete edge(s) between two specific memories
+
+    Args:
+        edge_id: Specific edge ID to delete (direct deletion mode)
+        memory_id: Memory ID to delete all connected edges (memory-based mode)
+        source_id: Source memory ID for pair deletion mode
+        target_id: Target memory ID for pair deletion mode
+        relation: Filter by relation type (optional). Valid: relates_to, supersedes, caused_by, contradicts
+        direction: For memory_id mode: 'outgoing', 'incoming', or 'both' (default: 'both')
+
+    Returns:
+        Result dictionary with:
+        - success: Boolean indicating operation success
+        - deleted_ids: List of edge IDs that were deleted
+        - deleted_count: Number of edges deleted
+        - error: Error message (if failed)
+
+    Examples:
+        Delete by edge ID: edge_id=42
+        Delete all edges for memory: memory_id="mem_123"
+        Delete specific relation: source_id="mem_123", target_id="mem_456", relation="contradicts"
+    """
+    if hybrid_store is None:
+        return {"success": False, "error": "Server not initialized"}
+
+    # Validate relation type if provided
+    if relation is not None:
+        try:
+            RelationType(relation)
+        except ValueError:
+            return {
+                "success": False,
+                "error": f"Invalid relation: {relation}. "
+                f"Must be one of: {[r.value for r in RelationType]}",
+            }
+
+    # Validate direction
+    if direction not in ("outgoing", "incoming", "both"):
+        return {
+            "success": False,
+            "error": f"Invalid direction: {direction}. Must be one of: outgoing, incoming, both",
+        }
+
+    try:
+        result = edge_forget(
+            store=hybrid_store,
+            edge_id=edge_id,
+            memory_id=memory_id,
+            source_id=source_id,
+            target_id=target_id,
+            relation=relation,
+            direction=direction,
+        )
+
+        return {
+            "success": result.success,
+            "deleted_ids": result.deleted_ids,
+            "deleted_count": result.deleted_count,
+            "error": result.error,
+        }
+    except Exception as e:
+        logger.error(f"memory_edge_forget_tool failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
 # MCP Tool Handlers - Memory Context
 # =============================================================================
 
