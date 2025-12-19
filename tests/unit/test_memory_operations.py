@@ -2854,15 +2854,16 @@ class TestEdgeForgetIntegration:
             relation=RelationType.SUPERSEDES,
         )
 
-        # Verify edges exist
+        # Verify edges exist (may include auto-inferred edges from memory_store)
         edges_both = integration_store.get_edges(mem1.id, direction="both")
-        assert len(edges_both) == 2
+        initial_edge_count = len(edges_both)
+        assert initial_edge_count >= 2  # At least our manually created edges
 
         # Delete all edges for mem1
         result = edge_forget(store=integration_store, memory_id=mem1.id)
 
         assert result.success is True
-        assert result.deleted_count == 2
+        assert result.deleted_count == initial_edge_count  # All edges deleted
 
         # Verify edges are gone
         edges_after = integration_store.get_edges(mem1.id, direction="both")
