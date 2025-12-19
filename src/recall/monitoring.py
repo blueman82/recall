@@ -414,25 +414,25 @@ Respond ONLY with a JSON object:
             # Extract the actual content from the wrapper
             if isinstance(wrapper, dict) and "result" in wrapper:
                 content = wrapper["result"]
+                logger.debug(f"Extracted result field, type={type(content).__name__}")
 
                 if isinstance(content, str):
                     # Strip markdown code blocks if present
-                    # Claude often wraps JSON in ```json ... ```
                     content = content.strip()
                     if content.startswith("```"):
-                        # Remove opening ```json or ```
                         lines = content.split("\n")
                         if lines[0].startswith("```"):
                             lines = lines[1:]
-                        # Remove closing ```
                         if lines and lines[-1].strip() == "```":
                             lines = lines[:-1]
                         content = "\n".join(lines)
 
+                    logger.debug(f"Parsing JSON content: {content[:200]}...")
                     return cast(dict[str, Any], json.loads(content))
                 elif isinstance(content, dict):
                     return cast(dict[str, Any], content)
 
+            logger.warning(f"Unexpected wrapper structure: {list(wrapper.keys()) if isinstance(wrapper, dict) else type(wrapper)}")
             return None
 
         except asyncio.TimeoutError:
