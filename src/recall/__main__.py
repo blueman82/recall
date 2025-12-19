@@ -34,8 +34,6 @@ from mcp.server.fastmcp import FastMCP
 
 from recall.config import RecallSettings
 from recall.memory.operations import (
-    EdgeForgetResult,
-    ForgetResult,
     edge_forget,
     inspect_graph,
     is_memory_id,
