@@ -2776,16 +2776,21 @@ class TestEdgeForgetIntegration:
     """Integration tests for edge_forget using real ephemeral stores."""
 
     @pytest.fixture
-    async def integration_store(self):
-        """Create real ephemeral HybridStore for integration tests."""
-        store = await HybridStore.create(
-            ephemeral=True,
-            sync_on_write=True,
-            collection_name=unique_collection_name(),
+    def integration_store(self):
+        """Create HybridStore with real ephemeral stores but mocked embedding client."""
+        sqlite = SQLiteStore(ephemeral=True)
+        chroma = ChromaStore(ephemeral=True, collection_name=unique_collection_name())
+        embedding_client = AsyncMock(spec=OllamaClient)
+
+        # Configure mock to return consistent embeddings
+        embedding_client.embed.return_value = [0.1] * 1024
+
+        store = HybridStore(
+            sqlite_store=sqlite,
+            chroma_store=chroma,
+            embedding_client=embedding_client,
         )
         yield store
-        # Cleanup
-        sqlite = store._sqlite
         sqlite.close()
 
     @pytest.mark.asyncio
