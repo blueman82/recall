@@ -1517,6 +1517,150 @@ async def memory_forget(
         )
 
 
+@dataclass
+class EdgeForgetResult:
+    """Result of an edge forget operation.
+
+    Indicates whether deletion succeeded and provides details about
+    what was deleted or an error message if it failed.
+
+    Attributes:
+        success: Whether the operation succeeded
+        deleted_ids: List of edge IDs that were deleted
+        deleted_count: Number of edges deleted
+        error: Error message (if failed)
+    """
+    success: bool
+    deleted_ids: list[int] = field(default_factory=list)
+    deleted_count: int = 0
+    error: Optional[str] = None
+
+
+def edge_forget(
+    store: HybridStore,
+    edge_id: Optional[int] = None,
+    memory_id: Optional[str] = None,
+    source_id: Optional[str] = None,
+    target_id: Optional[str] = None,
+    relation: Optional[str] = None,
+    direction: str = "both",
+) -> EdgeForgetResult:
+    """Delete edges by ID, memory ID, or source/target pair.
+
+    Supports three modes:
+    1. Direct ID deletion: If edge_id is provided, delete that specific edge
+    2. Memory-based deletion: If memory_id is provided, delete all edges connected to it
+    3. Pair deletion: If source_id and target_id are provided, delete edge(s) between them
+
+    Args:
+        store: HybridStore instance for storage operations
+        edge_id: Specific edge ID to delete (direct deletion mode)
+        memory_id: Memory ID to delete all connected edges (memory-based mode)
+        source_id: Source memory ID for pair deletion mode
+        target_id: Target memory ID for pair deletion mode
+        relation: Filter by relation type (optional, for memory/pair modes)
+        direction: For memory_id mode: 'outgoing', 'incoming', or 'both' (default: 'both')
+
+    Returns:
+        EdgeForgetResult with success status, deleted edge IDs, count, or error message
+
+    Example:
+        >>> store = await HybridStore.create(ephemeral=True)
+        >>> # Direct edge ID deletion
+        >>> result = edge_forget(store, edge_id=42)
+        >>> # Delete all edges for a memory
+        >>> result = edge_forget(store, memory_id="mem_123")
+        >>> # Delete specific edge between two memories
+        >>> result = edge_forget(store, source_id="mem_123", target_id="mem_456", relation="contradicts")
+    """
+    # Validate inputs - must provide one of the modes
+    modes_provided = sum([
+        edge_id is not None,
+        memory_id is not None,
+        source_id is not None or target_id is not None,
+    ])
+
+    if modes_provided == 0:
+        return EdgeForgetResult(
+            success=False,
+            error="Must provide edge_id, memory_id, or source_id/target_id pair",
+        )
+
+    if modes_provided > 1 and not (source_id is not None and target_id is not None and edge_id is None and memory_id is None):
+        return EdgeForgetResult(
+            success=False,
+            error="Cannot mix deletion modes - use edge_id, memory_id, or source_id/target_id pair",
+        )
+
+    # Pair mode requires both source and target
+    if (source_id is not None) != (target_id is not None):
+        return EdgeForgetResult(
+            success=False,
+            error="Pair deletion requires both source_id and target_id",
+        )
+
+    deleted_ids: list[int] = []
+
+    try:
+        if edge_id is not None:
+            # Direct edge ID deletion mode
+            deleted = store.delete_edge(edge_id)
+            if deleted:
+                deleted_ids.append(edge_id)
+            else:
+                return EdgeForgetResult(
+                    success=False,
+                    error=f"Edge '{edge_id}' not found",
+                )
+
+        elif memory_id is not None:
+            # Memory-based deletion mode - delete all edges connected to the memory
+            edges = store.get_edges(memory_id, direction=direction, edge_type=relation)
+
+            for edge in edges:
+                edge_db_id = edge.get("id")
+                if edge_db_id is not None:
+                    try:
+                        deleted = store.delete_edge(edge_db_id)
+                        if deleted:
+                            deleted_ids.append(edge_db_id)
+                    except Exception:
+                        # Continue with other deletions even if one fails
+                        pass
+
+        else:
+            # Pair deletion mode - delete edge(s) between source and target
+            assert source_id is not None and target_id is not None
+
+            # Get edges from source, filter to those pointing to target
+            edges = store.get_edges(source_id, direction="outgoing", edge_type=relation)
+
+            for edge in edges:
+                if edge.get("target_id") == target_id:
+                    edge_db_id = edge.get("id")
+                    if edge_db_id is not None:
+                        try:
+                            deleted = store.delete_edge(edge_db_id)
+                            if deleted:
+                                deleted_ids.append(edge_db_id)
+                        except Exception:
+                            pass
+
+        return EdgeForgetResult(
+            success=True,
+            deleted_ids=deleted_ids,
+            deleted_count=len(deleted_ids),
+        )
+
+    except Exception as e:
+        return EdgeForgetResult(
+            success=False,
+            deleted_ids=deleted_ids,
+            deleted_count=len(deleted_ids),
+            error=f"Failed to delete edges: {e}",
+        )
+
+
 def memory_relate(
     store: SQLiteStore,
     source_id: str,
